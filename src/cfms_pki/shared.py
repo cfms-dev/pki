@@ -8,6 +8,70 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa
 
+VALID_REASONS = {
+    "key_compromise",
+    "ca_compromise",
+    "affiliation_changed",
+    "superseded",
+    "cessation_of_operation",
+    "certificate_hold",
+    "privilege_withdrawn",
+    "aa_compromise",
+}
+
+
+def load_ca_key(ca_id: str, pk_env: str):
+    """Load CA private key from the designated environment variable."""
+    secret = os.environ.get(pk_env)
+    if not secret:
+        raise ValueError(
+            f"private key missing for CA '{ca_id}': environment variable ${pk_env} is not set or empty"
+        )
+
+    password = os.environ.get("CFMS_PKI_KEY_PASSWORD")
+    try:
+        key = serialization.load_pem_private_key(
+            secret.encode("utf-8"),
+            password=password.encode("utf-8") if password else None,
+        )
+    except Exception as exc:
+        raise ValueError(
+            f"failed to load private key for CA '{ca_id}' from ${pk_env}: {exc}"
+        ) from exc
+
+    if not isinstance(
+        key,
+        (
+            rsa.RSAPrivateKey,
+            ec.EllipticCurvePrivateKey,
+            ed25519.Ed25519PrivateKey,
+            ed448.Ed448PrivateKey,
+        ),
+    ):
+        raise TypeError(
+            f"unsupported key type for CA '{ca_id}': use RSA, ECDSA, Ed25519 or Ed448"
+        )
+    return key
+
+
+def resolve_ca_path(location: str, registry_dir: Path) -> Path:
+    """Resolve the location of a CA certificate file."""
+    loc = Path(location)
+    if loc.is_absolute() and loc.exists():
+        return loc
+    if loc.exists():
+        return loc
+
+    candidate = registry_dir.parent / loc
+    if candidate.exists():
+        return candidate
+
+    candidate2 = registry_dir / loc
+    if candidate2.exists():
+        return candidate2
+
+    raise FileNotFoundError(f"CA certificate file not found: {location}")
+
 
 def load_signing_key(args: argparse.Namespace):
     if args.key_file is not None:

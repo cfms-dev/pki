@@ -5,39 +5,37 @@ from pathlib import Path
 
 from cfms_pki.crl.issuing import issue_crl
 from cfms_pki.revocation import revoke_certificate
-from cfms_pki.shared import (
-    parse_serial,
-)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="cfms-pki")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    issue = subparsers.add_parser("issue-crl", help="issue or renew a full CRL")
-    issue.add_argument(
-        "--issuer", required=True, type=Path, help="issuer CA certificate (PEM)"
-    )
-
-    # key sources
-    source = issue.add_mutually_exclusive_group()
-    source.add_argument("--key-file", type=Path, help="path to CA private key (PEM)")
-    source.add_argument(
-        "--key-env", metavar="NAME", help="environment variable holding PEM key"
-    )
-
-    issue.add_argument("--output", required=True, type=Path)
-    issue.add_argument(
-        "--previous", type=Path, help="previous CRL (defaults to output if it exists)"
+    issue = subparsers.add_parser(
+        "issue-crl", help="issue or renew full CRLs from registry"
     )
     issue.add_argument(
-        "--require-previous",
+        "cas",
+        nargs="*",
+        metavar="CA",
+        help="intermediate CA(s) to issue CRL for (defaults to all CAs in registry)",
+    )
+    issue.add_argument(
+        "--registry-dir",
+        type=Path,
+        default=Path("registry"),
+        help="path to registry directory (defaults to registry)",
+    )
+    issue.add_argument(
+        "--valid-days",
+        type=int,
+        default=7,
+        help="validity period in days (defaults to 7)",
+    )
+    issue.add_argument(
+        "--fail-on-orphaned",
         action="store_true",
-        help="fail if there is no previous CRL",
-    )
-    issue.add_argument("--valid-days", type=int, default=7)
-    issue.add_argument(
-        "--revoke", action="append", type=parse_serial, default=[], metavar="SERIAL"
+        help="fail if revocation registry contains records for unregistered CAs",
     )
 
     revoke = subparsers.add_parser(

@@ -11,19 +11,9 @@ from cryptography import x509
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, padding, rsa
 
-from cfms_pki.shared import write_atomic
+from cfms_pki.shared import VALID_REASONS, resolve_ca_path, write_atomic
 
 KEY_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-VALID_REASONS = {
-    "key_compromise",
-    "ca_compromise",
-    "affiliation_changed",
-    "superseded",
-    "cessation_of_operation",
-    "certificate_hold",
-    "privilege_withdrawn",
-    "aa_compromise",
-}
 
 
 def parse_serial_string(value: str) -> tuple[int, str]:
@@ -113,25 +103,6 @@ def match_ca(cert: x509.Certificate, ca_cert: x509.Certificate) -> bool:
 
     # 3. Cryptographic signature verification
     return verify_cert_signature(cert, ca_cert)
-
-
-def resolve_ca_path(location: str, registry_dir: Path) -> Path:
-    """Resolve the location of a CA certificate file."""
-    loc = Path(location)
-    if loc.is_absolute() and loc.exists():
-        return loc
-    if loc.exists():
-        return loc
-
-    candidate = registry_dir.parent / loc
-    if candidate.exists():
-        return candidate
-
-    candidate2 = registry_dir / loc
-    if candidate2.exists():
-        return candidate2
-
-    raise FileNotFoundError(f"CA certificate file not found: {location}")
 
 
 def find_matching_cas(
