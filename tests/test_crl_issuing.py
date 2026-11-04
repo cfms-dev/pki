@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, mldsa
 from cryptography.x509.oid import NameOID
 
 from cfms_pki.cli import main
@@ -443,3 +443,96 @@ def test_invalid_valid_days_fails(crl_pki_env, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         main()
     assert exc.value.code == 1
+
+
+@pytest.mark.parametrize(
+    "algo,key_factory",
+    [
+        ("mldsa65", mldsa.MLDSA65PrivateKey.generate),
+        ("mldsa87", mldsa.MLDSA87PrivateKey.generate),
+        ("ed25519", ed25519.Ed25519PrivateKey.generate),
+    ],
+)
+def test_issue_crl_pqc_and_ed25519(tmp_path: Path, monkeypatch, algo, key_factory):
+    """Test issuing a CRL for ML-DSA-65, ML-DSA-87, and Ed25519 intermediate CAs."""
+    reg_dir = tmp_path / "registry"
+    certs_dir = tmp_path / "certs"
+    crl_dir = tmp_path / "crl"
+    reg_dir.mkdir()
+    certs_dir.mkdir()
+    crl_dir.mkdir()
+
+    ca_key = key_factory()
+    ca_name = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, f"Test {algo.upper()} CA"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Test PKI"),
+        ]
+    )
+    now = datetime.now(UTC)
+    ca_cert = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(0x9999)
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=False,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
+            critical=False,
+        )
+        .sign(ca_key, algorithm=None)
+    )
+
+    cert_path = certs_dir / f"{algo}-ca.pem"
+    cert_path.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+
+    key_pem = ca_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode("utf-8")
+    env_var = f"PK_{algo.upper()}_CA"
+    monkeypatch.setenv(env_var, key_pem)
+
+    ca_registry = {
+        "cas": {
+            f"{algo}-ca": {
+                "location": f"certs/{algo}-ca.pem",
+                "pk_env": env_var,
+            }
+        }
+    }
+    (reg_dir / "ca.json").write_text(json.dumps(ca_registry))
+    (reg_dir / "revocations.json").write_text(json.dumps({"revocations": {}}))
+
+    args = [
+        "cfms-pki",
+        "issue-crl",
+        "--registry-dir",
+        str(reg_dir),
+    ]
+    monkeypatch.setattr("sys.argv", args)
+    main()
+
+    output_crl = crl_dir / f"{algo}-ca.crl"
+    assert output_crl.exists()
+    crl_data = output_crl.read_bytes()
+    crl = x509.load_pem_x509_crl(crl_data)
+    assert crl.is_signature_valid(ca_cert.public_key())

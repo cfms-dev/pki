@@ -3,6 +3,7 @@
 import argparse
 from pathlib import Path
 
+from cfms_pki.ca_gen import generate_ca, register_gen_ca_cli
 from cfms_pki.crl.issuing import issue_crl
 from cfms_pki.revocation import revoke_certificate
 
@@ -123,6 +124,8 @@ def main() -> None:
         help="do not copy CRL files to output directory",
     )
 
+    register_gen_ca_cli(subparsers)
+
     args = parser.parse_args()
 
     try:
@@ -140,6 +143,28 @@ def main() -> None:
                 output_dir=args.output_dir,
                 template_dir=args.template_dir,
                 copy_crls=not args.no_copy,
+            )
+        elif args.command == "gen-ca":
+            cert, _key = generate_ca(
+                common_name=args.common_name,
+                algorithm=args.algorithm,
+                organization=args.organization,
+                country=args.country,
+                state=args.state,
+                locality=args.locality,
+                valid_days=args.valid_days,
+                path_length=args.path_length,
+                issuer_cert_path=args.issuer_cert,
+                issuer_key_path=args.issuer_key,
+                issuer_key_env=args.issuer_key_env,
+                issuer_key_password=args.issuer_key_password,
+                out_cert_path=args.out_cert,
+                out_key_path=args.out_key,
+                key_password=args.key_password,
+            )
+            print(
+                f"Generated CA ({args.algorithm}): {args.out_cert} and {args.out_key} "
+                f"(Serial={cert.serial_number:#X})"
             )
     except (OSError, ValueError, TypeError) as exc:
         parser.exit(1, f"cfms-pki: {exc}\n")

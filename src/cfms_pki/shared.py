@@ -6,7 +6,27 @@ from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, mldsa, rsa
+
+SUPPORTED_PRIVATE_KEY_TYPES = (
+    mldsa.MLDSA65PrivateKey,
+    mldsa.MLDSA87PrivateKey,
+    mldsa.MLDSA44PrivateKey,
+    ed25519.Ed25519PrivateKey,
+    ed448.Ed448PrivateKey,
+    ec.EllipticCurvePrivateKey,
+    rsa.RSAPrivateKey,
+)
+
+SUPPORTED_PUBLIC_KEY_TYPES = (
+    mldsa.MLDSA65PublicKey,
+    mldsa.MLDSA87PublicKey,
+    mldsa.MLDSA44PublicKey,
+    ed25519.Ed25519PublicKey,
+    ed448.Ed448PublicKey,
+    ec.EllipticCurvePublicKey,
+    rsa.RSAPublicKey,
+)
 
 VALID_REASONS = {
     "key_compromise",
@@ -39,17 +59,9 @@ def load_ca_key(ca_id: str, pk_env: str):
             f"failed to load private key for CA '{ca_id}' from ${pk_env}: {exc}"
         ) from exc
 
-    if not isinstance(
-        key,
-        (
-            rsa.RSAPrivateKey,
-            ec.EllipticCurvePrivateKey,
-            ed25519.Ed25519PrivateKey,
-            ed448.Ed448PrivateKey,
-        ),
-    ):
+    if not isinstance(key, SUPPORTED_PRIVATE_KEY_TYPES):
         raise TypeError(
-            f"unsupported key type for CA '{ca_id}': use RSA, ECDSA, Ed25519 or Ed448"
+            f"unsupported key type for CA '{ca_id}': use ML-DSA, Ed25519, Ed448, ECDSA, or RSA"
         )
     return key
 
@@ -87,16 +99,10 @@ def load_signing_key(args: argparse.Namespace):
     key = serialization.load_pem_private_key(
         pem, password=password.encode("utf-8") if password else None
     )
-    if not isinstance(
-        key,
-        (
-            rsa.RSAPrivateKey,
-            ec.EllipticCurvePrivateKey,
-            ed25519.Ed25519PrivateKey,
-            ed448.Ed448PrivateKey,
-        ),
-    ):
-        raise TypeError("unsupported key type: use RSA, ECDSA, Ed25519 or Ed448")
+    if not isinstance(key, SUPPORTED_PRIVATE_KEY_TYPES):
+        raise TypeError(
+            "unsupported key type: use ML-DSA, Ed25519, Ed448, ECDSA, or RSA"
+        )
     return key
 
 
@@ -132,16 +138,10 @@ def check_signer(ca: x509.Certificate, key, now: datetime) -> None:
 
 def authority_key_identifier(ca: x509.Certificate) -> x509.AuthorityKeyIdentifier:
     public_key = ca.public_key()
-    if not isinstance(
-        public_key,
-        (
-            rsa.RSAPublicKey,
-            ec.EllipticCurvePublicKey,
-            ed25519.Ed25519PublicKey,
-            ed448.Ed448PublicKey,
-        ),
-    ):
-        raise TypeError("unsupported issuer key type: use RSA, ECDSA, Ed25519 or Ed448")
+    if not isinstance(public_key, SUPPORTED_PUBLIC_KEY_TYPES):
+        raise TypeError(
+            "unsupported issuer key type: use ML-DSA, Ed25519, Ed448, ECDSA, or RSA"
+        )
 
     try:
         ski = ca.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value

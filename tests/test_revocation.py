@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, mldsa
 from cryptography.x509.oid import NameOID
 
 from cfms_pki.cli import main
@@ -439,3 +439,129 @@ def test_update_existing_entry(ca_environment, monkeypatch):
     data = json.loads(rev_path.read_text(encoding="utf-8"))
     entry = data["revocations"]["ca-one"]["cert-to-update"]
     assert entry["reason"] == "superseded"
+
+
+@pytest.mark.parametrize(
+    "algo,key_factory",
+    [
+        ("mldsa65", mldsa.MLDSA65PrivateKey.generate),
+        ("mldsa87", mldsa.MLDSA87PrivateKey.generate),
+        ("ed25519", ed25519.Ed25519PrivateKey.generate),
+    ],
+)
+def test_revoke_pqc_and_ed25519(tmp_path: Path, monkeypatch, algo, key_factory):
+    """Test revoking a certificate signed by ML-DSA-65, ML-DSA-87, or Ed25519 CA."""
+    reg_dir = tmp_path / "registry"
+    certs_dir = tmp_path / "certs"
+    reg_dir.mkdir()
+    certs_dir.mkdir()
+
+    ca_key = key_factory()
+    ca_name = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, f"{algo.upper()} CA"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Test PKI"),
+        ]
+    )
+    now = datetime.now(UTC)
+    ca_cert = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(0x5555)
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
+            critical=False,
+        )
+        .sign(ca_key, algorithm=None)
+    )
+
+    ca_pem_path = certs_dir / f"{algo}-ca.pem"
+    ca_pem_path.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+
+    # Issue a leaf certificate signed by this CA
+    leaf_key = key_factory()
+    leaf_name = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, f"Leaf for {algo}"),
+        ]
+    )
+    leaf_cert = (
+        x509.CertificateBuilder()
+        .subject_name(leaf_name)
+        .issuer_name(ca_cert.subject)
+        .public_key(leaf_key.public_key())
+        .serial_number(0xABCDEF)
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=30))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=False,
+                crl_sign=False,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+            critical=False,
+        )
+        .sign(ca_key, algorithm=None)
+    )
+
+    leaf_pem_path = tmp_path / f"{algo}-leaf.pem"
+    leaf_pem_path.write_bytes(leaf_cert.public_bytes(serialization.Encoding.PEM))
+
+    ca_registry = {
+        "cas": {
+            f"{algo}-ca": {
+                "location": f"certs/{algo}-ca.pem",
+                "pk_env": f"PK_{algo.upper()}_CA",
+            }
+        }
+    }
+    (reg_dir / "ca.json").write_text(json.dumps(ca_registry))
+    (reg_dir / "revocations.json").write_text(json.dumps({"revocations": {}}))
+
+    args = [
+        "cfms-pki",
+        "revoke",
+        "--pem",
+        str(leaf_pem_path),
+        "--reason",
+        "key_compromise",
+        "--registry-dir",
+        str(reg_dir),
+    ]
+    monkeypatch.setattr("sys.argv", args)
+    main()
+
+    rev_data = json.loads((reg_dir / "revocations.json").read_text())
+    assert f"{algo}-ca" in rev_data["revocations"]
+    assert "ABCDEF" in rev_data["revocations"][f"{algo}-ca"]
+    assert rev_data["revocations"][f"{algo}-ca"]["ABCDEF"]["reason"] == "key_compromise"

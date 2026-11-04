@@ -9,7 +9,14 @@ from typing import Any
 
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
-from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, padding, rsa
+from cryptography.hazmat.primitives.asymmetric import (
+    ec,
+    ed448,
+    ed25519,
+    mldsa,
+    padding,
+    rsa,
+)
 
 from cfms_pki.shared import VALID_REASONS, resolve_ca_path, write_atomic
 
@@ -58,7 +65,16 @@ def verify_cert_signature(
             pubkey.verify(
                 cert.signature, cert.tbs_certificate_bytes, ec.ECDSA(hash_algo)
             )
-        elif isinstance(pubkey, (ed25519.Ed25519PublicKey, ed448.Ed448PublicKey)):
+        elif isinstance(
+            pubkey,
+            (
+                ed25519.Ed25519PublicKey,
+                ed448.Ed448PublicKey,
+                mldsa.MLDSA65PublicKey,
+                mldsa.MLDSA87PublicKey,
+                mldsa.MLDSA44PublicKey,
+            ),
+        ):
             pubkey.verify(cert.signature, cert.tbs_certificate_bytes)
         else:
             return False
