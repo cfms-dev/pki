@@ -96,6 +96,33 @@ def main() -> None:
         help="path to registry directory (defaults to registry)",
     )
 
+    pages = subparsers.add_parser(
+        "build-pages", help="build static GitHub Pages distribution site for CRLs"
+    )
+    pages.add_argument(
+        "--crl-dir",
+        type=Path,
+        default=Path("crl"),
+        help="path to source CRL directory (defaults to crl)",
+    )
+    pages.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("_site"),
+        help="path to output distribution directory (defaults to _site)",
+    )
+    pages.add_argument(
+        "--template-dir",
+        type=Path,
+        default=None,
+        help="custom template directory to override built-in templates",
+    )
+    pages.add_argument(
+        "--no-copy",
+        action="store_true",
+        help="do not copy CRL files to output directory",
+    )
+
     args = parser.parse_args()
 
     try:
@@ -105,6 +132,15 @@ def main() -> None:
             issue_crl(args)
         elif args.command == "revoke":
             revoke_certificate(args)
+        elif args.command == "build-pages":
+            from cfms_pki.crl.pages import build_crl_pages
+
+            build_crl_pages(
+                crl_dir=args.crl_dir,
+                output_dir=args.output_dir,
+                template_dir=args.template_dir,
+                copy_crls=not args.no_copy,
+            )
     except (OSError, ValueError, TypeError) as exc:
         parser.exit(1, f"cfms-pki: {exc}\n")
 

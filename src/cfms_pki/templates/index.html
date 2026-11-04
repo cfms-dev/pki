@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block content %}
+  {% if is_crl_subdir %}
+  <p class="nav-back"><a href="../">← Back to Root</a></p>
+  {% endif %}
+  <h1>{{ title }}</h1>
+  <p class="desc">{{ desc|safe }}</p>
+  <table>
+    <thead>
+      <tr>
+        <th>CRL File</th>
+        <th>Size</th>
+        <th>SHA-256 Checksum</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for crl in crls %}
+      <tr>
+        <td><a href="{{ crl.href }}"><code>{{ crl.name }}</code></a></td>
+        <td>{{ crl.size }}</td>
+        <td><code class="hash">{{ crl.sha256 }}</code></td>
+        <td><a href="{{ crl.href }}" class="btn" download>Download</a></td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="4" class="empty">No CRL files available.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}
