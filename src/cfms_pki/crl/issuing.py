@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives.asymmetric.types import (
 )
 from cryptography.x509.oid import ExtensionOID
 
-from cfms_pki.modules.shared import (
+from cfms_pki.shared import (
     authority_key_identifier,
     check_signer,
     load_signing_key,
@@ -66,8 +66,7 @@ def issue_crl(args: argparse.Namespace) -> None:
     for serial in args.revoke:
         if serial not in revoked:
             revoked[serial] = (
-                x509
-                .RevokedCertificateBuilder()
+                x509.RevokedCertificateBuilder()
                 .serial_number(serial)
                 .revocation_date(now)
                 .build()
@@ -78,8 +77,7 @@ def issue_crl(args: argparse.Namespace) -> None:
         raise ValueError("CRL validity would be empty")
 
     builder = (
-        x509
-        .CertificateRevocationListBuilder()
+        x509.CertificateRevocationListBuilder()
         .issuer_name(ca.subject)
         .last_update(now)
         .next_update(end)

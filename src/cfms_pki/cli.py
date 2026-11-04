@@ -3,8 +3,8 @@
 import argparse
 from pathlib import Path
 
-from cfms_pki.modules.crl.issuing import issue_crl
-from cfms_pki.modules.shared import (
+from cfms_pki.crl.issuing import issue_crl
+from cfms_pki.shared import (
     parse_serial,
 )
 
