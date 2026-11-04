@@ -1,16 +1,9 @@
 """Issue and renew complete X.509 certificate revocation lists."""
 
 import argparse
-from datetime import UTC, datetime
 from pathlib import Path
 
 from cfms_pki.ca_gen import generate_ca, register_gen_ca_cli
-from cfms_pki.crl.inference import (
-    calculate_retention_boundary,
-    parse_duration,
-    resolve_cutoff,
-    resolve_last_success,
-)
 from cfms_pki.crl.issuing import issue_crl
 from cfms_pki.revocation import revoke_certificate
 
@@ -163,39 +156,6 @@ def main() -> None:
         help="do not copy CRL files to output directory",
     )
 
-    infer = subparsers.add_parser(
-        "infer-cutoff",
-        aliases=["inspect-cutoff"],
-        help="inspect effective CRL retention boundary H based on retention model",
-    )
-    infer.add_argument(
-        "--expired-before",
-        "-c",
-        type=str,
-        default="now",
-        help="user-specified cutoff timestamp C in ISO 8601 (defaults to current time 'now')",
-    )
-    infer.add_argument(
-        "--last-success",
-        "-s",
-        type=str,
-        default=None,
-        help="start time S of the last successful regular CRL issuing run (exact ISO 8601 timestamp)",
-    )
-    infer.add_argument(
-        "--grace-period",
-        "-g",
-        type=str,
-        default="0s",
-        help="extra retention grace period G (e.g. '0s', '1d', '12h'; defaults to 0s)",
-    )
-    infer.add_argument(
-        "--clock-tolerance",
-        type=str,
-        default="5m",
-        help="clock skew safety margin epsilon (e.g. '5m', '300s'; defaults to 5m)",
-    )
-
     register_gen_ca_cli(subparsers)
 
     args = parser.parse_args()
@@ -216,34 +176,6 @@ def main() -> None:
                 template_dir=args.template_dir,
                 copy_crls=not args.no_copy,
             )
-        elif args.command in ("infer-cutoff", "inspect-cutoff"):
-            now = datetime.now(UTC).replace(microsecond=0)
-            cutoff = resolve_cutoff(args.expired_before, now)
-            last_success = resolve_last_success(args.last_success)
-            grace_period = parse_duration(args.grace_period)
-            clock_tolerance = parse_duration(args.clock_tolerance)
-            h = calculate_retention_boundary(
-                now=now,
-                last_success=last_success,
-                cutoff=cutoff,
-                grace_period=grace_period,
-                clock_tolerance=clock_tolerance,
-            )
-            print(f"T (Now):             {now.isoformat()}")
-            print(
-                f"S (Last Success):    {last_success.isoformat() if last_success else 'None'}"
-            )
-            print(f"C (User Cutoff):     {cutoff.isoformat() if cutoff else 'None'}")
-            print(f"G (Grace Period):    {grace_period}")
-            print(f"ε (Clock Tolerance): {clock_tolerance}")
-            if h is not None:
-                print(f"H (Effective Bound): {h.isoformat()}")
-                print(f"Result: Exclude records where E (not_after) < {h.isoformat()}")
-            else:
-                print("H (Effective Bound): None")
-                print(
-                    "Result: S is None or S > T. Retain ALL records per RFC 5280 §3.3."
-                )
         elif args.command == "gen-ca":
             cert, _key = generate_ca(
                 common_name=args.common_name,

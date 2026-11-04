@@ -714,28 +714,3 @@ def test_issue_crl_no_filter_expired_flag(crl_pki_env, monkeypatch):
     crl_path = env["crl_dir"] / "ca-one.crl"
     crl = x509.load_pem_x509_crl(crl_path.read_bytes())
     assert crl.get_revoked_certificate_by_serial_number(0x1111) is not None
-
-
-def test_cli_infer_cutoff_command(monkeypatch, capsys):
-    """Test running infer-cutoff CLI command."""
-    args = [
-        "cfms-pki",
-        "infer-cutoff",
-        "--last-success",
-        "2026-11-01T00:00:00Z",
-        "--grace-period",
-        "1d",
-        "--clock-tolerance",
-        "5m",
-    ]
-    monkeypatch.setattr("sys.argv", args)
-    main()
-
-    captured = capsys.readouterr()
-    assert "S (Last Success):    2026-11-01T00:00:00+00:00" in captured.out
-    assert "G (Grace Period):    1 day, 0:00:00" in captured.out
-    assert "H (Effective Bound): 2026-10-30T23:55:00+00:00" in captured.out
-    assert (
-        "Exclude records where E (not_after) < 2026-10-30T23:55:00+00:00"
-        in captured.out
-    )
