@@ -1,0 +1,9 @@
+{
+    "$schema": "../schemas/ca-registry.schema.json",
+    "cas": {
+        "generic-intermediate": {
+            "location": "certs/generic-intermediate.pem",
+            "pk_env": "PK_GENERIC_INTERMEDIATE"
+        }
+    }
+}

@@ -1,0 +1,65 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "$schema": {
+            "type": "string",
+            "format": "uri-reference"
+        },
+        "revocations": {
+            "type": "object",
+            "propertyNames": {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+            },
+            "additionalProperties": {
+                "type": "array",
+                "items": {
+                    "$ref": "#/$defs/revocation"
+                }
+            }
+        }
+    },
+    "$defs": {
+        "revocation": {
+            "type": "object",
+            "properties": {
+                "serial": {
+                    "type": "string",
+                    "pattern": "^[0-9A-F]+$",
+                    "$comment": "Serial number of the revoked certificate in hexadecimal format"
+                },
+                "date": {
+                    "type": "string",
+                    "format": "date-time",
+                    "$comment": "Date and time when the certificate was revoked"
+                },
+                "reason": {
+                    "type": "string",
+                    "enum": [
+                        "key_compromise",
+                        "ca_compromise",
+                        "affiliation_changed",
+                        "superseded",
+                        "cessation_of_operation",
+                        "certificate_hold",
+                        "privilege_withdrawn",
+                        "aa_compromise"
+                    ]
+                },
+                "not_after": {
+                    "type": "string",
+                    "format": "date-time"
+                }
+            },
+            "required": [
+                "serial",
+                "date"
+            ],
+            "additionalProperties": false
+        }
+    },
+    "required": [
+        "revocations"
+    ],
+    "additionalProperties": false
+}

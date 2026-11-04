@@ -1,0 +1,49 @@
+
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri-reference"
+    },
+    "cas": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9-]{0,63}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/ca"
+      }
+    }
+  },
+  "$defs": {
+    "ca": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "Path to the CA certificate file"
+        },
+        "pk_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "$comment": "Environment variable name for the private key"
+        },
+        "crl_path": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "Path to the CRL output location"
+        }
+      },
+      "required": [
+        "location",
+        "pk_env"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": ["cas"],
+  "additionalProperties": false
+}
