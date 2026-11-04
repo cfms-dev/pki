@@ -51,7 +51,8 @@
                 },
                 "not_after": {
                     "type": "string",
-                    "format": "date-time"
+                    "format": "date-time",
+                    "$comment": "(Optional) Date and time after which the certificate should no longer be considered valid"
                 }
             },
             "required": [
