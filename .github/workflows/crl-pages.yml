@@ -17,6 +17,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: read
 
 concurrency:
   group: 'pages'
@@ -37,12 +38,24 @@ jobs:
       - name: Install Python
         run: uv python install
 
+      - name: Fetch last successful run timestamp
+        id: last_success
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          uv run python scripts/fetch_last_success.py
+
       - name: Issue CRLs
         env:
           PK_GENERIC_INTERMEDIATE: ${{ secrets.PK_GENERIC_INTERMEDIATE }}
           CFMS_PKI_KEY_PASSWORD: ${{ secrets.CFMS_PKI_KEY_PASSWORD }}
+          LAST_SUCCESS: ${{ steps.last_success.outputs.timestamp }}
         run: |
-          uv run cfms-pki issue-crl
+          if [ -n "$LAST_SUCCESS" ]; then
+            uv run cfms-pki issue-crl --last-success "$LAST_SUCCESS"
+          else
+            uv run cfms-pki issue-crl
+          fi
 
       - name: Prepare Pages distribution directory
         run: |

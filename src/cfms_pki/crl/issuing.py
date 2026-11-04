@@ -16,6 +16,13 @@ from cryptography.hazmat.primitives.asymmetric.types import (
     CertificateIssuerPublicKeyTypes,
 )
 
+from cfms_pki.crl.inference import (
+    calculate_retention_boundary,
+    parse_duration,
+    resolve_cutoff,
+    resolve_last_success,
+    should_exclude_revocation,
+)
 from cfms_pki.shared import (
     VALID_REASONS,
     authority_key_identifier,
@@ -105,6 +112,7 @@ def issue_crl_for_ca(
     registry_dir: Path,
     now: datetime,
     valid_days: int,
+    retention_boundary: datetime | None = None,
 ) -> Path:
     """Issue a CRL for a single intermediate CA based on registry records."""
     if not isinstance(ca_info, dict):
@@ -120,9 +128,15 @@ def issue_crl_for_ca(
     check_signer(ca_cert, key, now)
 
     revoked: dict[int, x509.RevokedCertificate] = {}
+    excluded_expired = 0
     for entry_key, entry in ca_revocations.items():
         if not isinstance(entry, dict) or "serial" not in entry or "date" not in entry:
             continue
+
+        if should_exclude_revocation(entry, retention_boundary):
+            excluded_expired += 1
+            continue
+
         try:
             serial_int = int(entry["serial"], 16)
         except ValueError as exc:
@@ -205,7 +219,7 @@ def issue_crl_for_ca(
     write_atomic(output_path, crl.public_bytes(serialization.Encoding.PEM))
 
     print(
-        f"Issued CRL for CA '{ca_id}': {output_path} (CRLNumber={crl_number}, revoked={len(revoked)})"
+        f"Issued CRL for CA '{ca_id}': {output_path} (CRLNumber={crl_number}, revoked={len(revoked)}, excluded_expired={excluded_expired})"
     )
     return output_path
 
@@ -259,6 +273,47 @@ def issue_crl(args: argparse.Namespace) -> None:
 
     now = datetime.now(UTC).replace(microsecond=0)
 
+    # Resolve retention model boundary H = min(C, T, S - G - epsilon)
+    no_filter = getattr(args, "no_filter_expired", False)
+    if no_filter:
+        boundary = None
+        print(
+            "Retention Model: Filter disabled (--no-filter-expired). Retaining all records."
+        )
+    else:
+        expired_before_raw = getattr(args, "expired_before", "now")
+        cutoff = resolve_cutoff(expired_before_raw, now)
+
+        last_success_raw = getattr(args, "last_success", None)
+        last_success = resolve_last_success(last_success_raw)
+
+        grace_period_raw = getattr(args, "grace_period", "0s")
+        grace_period = parse_duration(grace_period_raw)
+
+        clock_tolerance_raw = getattr(args, "clock_tolerance", "5m")
+        clock_tolerance = parse_duration(clock_tolerance_raw)
+
+        boundary = calculate_retention_boundary(
+            now=now,
+            last_success=last_success,
+            cutoff=cutoff,
+            grace_period=grace_period,
+            clock_tolerance=clock_tolerance,
+        )
+
+        if boundary is not None:
+            s_str = last_success.isoformat() if last_success else "None"
+            c_str = cutoff.isoformat() if cutoff else "None"
+            print(
+                f"Retention Model: T={now.isoformat()}, S={s_str}, C={c_str}, "
+                f"G={grace_period_raw}, epsilon={clock_tolerance_raw} -> "
+                f"Effective Boundary H={boundary.isoformat()}"
+            )
+        else:
+            print(
+                "Retention Model: S is None or inactive (retaining all revocations per RFC 5280 §3.3)"
+            )
+
     for ca_id in target_cas:
         issue_crl_for_ca(
             ca_id=ca_id,
@@ -267,4 +322,5 @@ def issue_crl(args: argparse.Namespace) -> None:
             registry_dir=registry_dir,
             now=now,
             valid_days=args.valid_days,
+            retention_boundary=boundary,
         )

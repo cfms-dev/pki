@@ -536,3 +536,206 @@ def test_issue_crl_pqc_and_ed25519(tmp_path: Path, monkeypatch, algo, key_factor
     crl_data = output_crl.read_bytes()
     crl = x509.load_pem_x509_crl(crl_data)
     assert crl.is_signature_valid(ca_cert.public_key())
+
+
+def test_issue_crl_retention_model_excludes_expired_before_boundary(
+    crl_pki_env, monkeypatch
+):
+    """Test that certificates with not_after < H are excluded, while others are retained."""
+    env = crl_pki_env
+    rev_path = env["reg_dir"] / "revocations.json"
+
+    # Set up 3 revocations under ca-one:
+    # 1. 0x1111: expired 2026-10-20 (earlier than boundary -> exclude)
+    # 2. 0x2222: expires 2026-11-02 (later than boundary -> retain)
+    # 3. 0x3333: no not_after (no expiration info -> retain)
+    rev_data = {
+        "$schema": "../schemas/revocations.schema.json",
+        "revocations": {
+            "ca-one": {
+                "leaf-expired-pruned": {
+                    "serial": "1111",
+                    "date": "2026-10-01T00:00:00Z",
+                    "not_after": "2026-10-20T00:00:00Z",
+                },
+                "leaf-expired-retained": {
+                    "serial": "2222",
+                    "date": "2026-10-01T00:00:00Z",
+                    "not_after": "2026-11-02T00:00:00Z",
+                },
+                "leaf-no-not-after": {
+                    "serial": "3333",
+                    "date": "2026-10-01T00:00:00Z",
+                },
+            }
+        },
+    }
+    rev_path.write_text(json.dumps(rev_data, indent=4), encoding="utf-8")
+
+    # Run issue-crl with S = 2026-11-01T00:00:00Z, clock_tolerance = 5m, grace = 0s
+    # Boundary H = 2026-10-31T23:55:00Z
+    args = [
+        "cfms-pki",
+        "issue-crl",
+        "ca-one",
+        "--registry-dir",
+        str(env["reg_dir"]),
+        "--last-success",
+        "2026-11-01T00:00:00Z",
+        "--clock-tolerance",
+        "5m",
+        "--grace-period",
+        "0s",
+    ]
+    monkeypatch.setattr("sys.argv", args)
+    main()
+
+    crl_path = env["crl_dir"] / "ca-one.crl"
+    assert crl_path.exists()
+    crl = x509.load_pem_x509_crl(crl_path.read_bytes())
+
+    # 0x1111 must be EXCLUDED
+    assert crl.get_revoked_certificate_by_serial_number(0x1111) is None
+    # 0x2222 must be RETAINED
+    assert crl.get_revoked_certificate_by_serial_number(0x2222) is not None
+    # 0x3333 must be RETAINED
+    assert crl.get_revoked_certificate_by_serial_number(0x3333) is not None
+
+
+def test_issue_crl_no_last_success_retains_all(crl_pki_env, monkeypatch):
+    """When --last-success is not provided (S is None), retention safeguard retains all records."""
+    env = crl_pki_env
+    rev_path = env["reg_dir"] / "revocations.json"
+
+    rev_data = {
+        "$schema": "../schemas/revocations.schema.json",
+        "revocations": {
+            "ca-one": {
+                "leaf-1": {
+                    "serial": "1111",
+                    "date": "2026-10-01T00:00:00Z",
+                    "not_after": "2026-10-20T00:00:00Z",
+                },
+                "leaf-2": {
+                    "serial": "2222",
+                    "date": "2026-10-01T00:00:00Z",
+                    "not_after": "2026-11-02T00:00:00Z",
+                },
+            }
+        },
+    }
+    rev_path.write_text(json.dumps(rev_data, indent=4), encoding="utf-8")
+
+    args = [
+        "cfms-pki",
+        "issue-crl",
+        "ca-one",
+        "--registry-dir",
+        str(env["reg_dir"]),
+    ]
+    monkeypatch.setattr("sys.argv", args)
+    main()
+
+    crl_path = env["crl_dir"] / "ca-one.crl"
+    crl = x509.load_pem_x509_crl(crl_path.read_bytes())
+    # Both must be retained
+    assert crl.get_revoked_certificate_by_serial_number(0x1111) is not None
+    assert crl.get_revoked_certificate_by_serial_number(0x2222) is not None
+
+
+def test_issue_crl_future_last_success_retains_all(crl_pki_env, monkeypatch):
+    """When S > T (last success is in the future), retention safeguard retains all records."""
+    env = crl_pki_env
+    rev_path = env["reg_dir"] / "revocations.json"
+
+    rev_data = {
+        "$schema": "../schemas/revocations.schema.json",
+        "revocations": {
+            "ca-one": {
+                "leaf-1": {
+                    "serial": "1111",
+                    "date": "2026-10-01T00:00:00Z",
+                    "not_after": "2026-10-20T00:00:00Z",
+                },
+            }
+        },
+    }
+    rev_path.write_text(json.dumps(rev_data, indent=4), encoding="utf-8")
+
+    args = [
+        "cfms-pki",
+        "issue-crl",
+        "ca-one",
+        "--registry-dir",
+        str(env["reg_dir"]),
+        "--last-success",
+        "2099-01-01T00:00:00Z",
+    ]
+    monkeypatch.setattr("sys.argv", args)
+    main()
+
+    crl_path = env["crl_dir"] / "ca-one.crl"
+    crl = x509.load_pem_x509_crl(crl_path.read_bytes())
+    assert crl.get_revoked_certificate_by_serial_number(0x1111) is not None
+
+
+def test_issue_crl_no_filter_expired_flag(crl_pki_env, monkeypatch):
+    """When --no-filter-expired is set, all records are retained regardless of S and not_after."""
+    env = crl_pki_env
+    rev_path = env["reg_dir"] / "revocations.json"
+
+    rev_data = {
+        "$schema": "../schemas/revocations.schema.json",
+        "revocations": {
+            "ca-one": {
+                "leaf-1": {
+                    "serial": "1111",
+                    "date": "2026-10-01T00:00:00Z",
+                    "not_after": "2026-10-20T00:00:00Z",
+                },
+            }
+        },
+    }
+    rev_path.write_text(json.dumps(rev_data, indent=4), encoding="utf-8")
+
+    args = [
+        "cfms-pki",
+        "issue-crl",
+        "ca-one",
+        "--registry-dir",
+        str(env["reg_dir"]),
+        "--last-success",
+        "2026-11-01T00:00:00Z",
+        "--no-filter-expired",
+    ]
+    monkeypatch.setattr("sys.argv", args)
+    main()
+
+    crl_path = env["crl_dir"] / "ca-one.crl"
+    crl = x509.load_pem_x509_crl(crl_path.read_bytes())
+    assert crl.get_revoked_certificate_by_serial_number(0x1111) is not None
+
+
+def test_cli_infer_cutoff_command(monkeypatch, capsys):
+    """Test running infer-cutoff CLI command."""
+    args = [
+        "cfms-pki",
+        "infer-cutoff",
+        "--last-success",
+        "2026-11-01T00:00:00Z",
+        "--grace-period",
+        "1d",
+        "--clock-tolerance",
+        "5m",
+    ]
+    monkeypatch.setattr("sys.argv", args)
+    main()
+
+    captured = capsys.readouterr()
+    assert "S (Last Success):    2026-11-01T00:00:00+00:00" in captured.out
+    assert "G (Grace Period):    1 day, 0:00:00" in captured.out
+    assert "H (Effective Bound): 2026-10-30T23:55:00+00:00" in captured.out
+    assert (
+        "Exclude records where E (not_after) < 2026-10-30T23:55:00+00:00"
+        in captured.out
+    )
