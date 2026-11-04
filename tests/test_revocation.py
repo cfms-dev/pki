@@ -565,3 +565,137 @@ def test_revoke_pqc_and_ed25519(tmp_path: Path, monkeypatch, algo, key_factory):
     assert f"{algo}-ca" in rev_data["revocations"]
     assert "ABCDEF" in rev_data["revocations"][f"{algo}-ca"]
     assert rev_data["revocations"][f"{algo}-ca"]["ABCDEF"]["reason"] == "key_compromise"
+
+
+def test_revoke_expired_cert_auto_inference(ca_environment, monkeypatch, capsys):
+    env = ca_environment
+    now = datetime.now(UTC)
+    # Generate an expired leaf cert signed by CA 1
+    expired_key = ec.generate_private_key(ec.SECP256R1())
+    expired_cert = (
+        x509.CertificateBuilder()
+        .subject_name(
+            x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "expired.example.com")])
+        )
+        .issuer_name(env["ca1_cert"].subject)
+        .public_key(expired_key.public_key())
+        .serial_number(0xDEADBEEF)
+        .not_valid_before(now - timedelta(days=60))
+        .not_valid_after(now - timedelta(days=1))
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(
+                env["ca1_cert"]
+                .extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+                .value
+            ),
+            critical=False,
+        )
+        .sign(env["ca1_key"], hashes.SHA256())
+    )
+    expired_pem = env["certs_dir"] / "expired.pem"
+    expired_pem.write_bytes(expired_cert.public_bytes(serialization.Encoding.PEM))
+
+    args = [
+        "cfms-pki",
+        "revoke",
+        "--pem",
+        str(expired_pem),
+        "--registry-dir",
+        str(env["reg_dir"]),
+    ]
+    monkeypatch.setattr("sys.argv", args)
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "expired" in captured.err.lower()
+
+    # Verify nothing was added to revocations.json
+    rev_path = env["reg_dir"] / "revocations.json"
+    if rev_path.exists():
+        data = json.loads(rev_path.read_text(encoding="utf-8"))
+        assert "DEADBEEF" not in data.get("revocations", {}).get("ca-one", {})
+
+
+def test_revoke_expired_not_after_manual(ca_environment, monkeypatch, capsys):
+    env = ca_environment
+    past_not_after = (
+        (datetime.now(UTC) - timedelta(days=5))
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    args = [
+        "cfms-pki",
+        "revoke",
+        "--serial",
+        "0x1234",
+        "--ca",
+        "ca-one",
+        "--not-after",
+        past_not_after,
+        "--registry-dir",
+        str(env["reg_dir"]),
+    ]
+    monkeypatch.setattr("sys.argv", args)
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "expired" in captured.err.lower()
+
+
+def test_revoke_valid_not_after_manual(ca_environment, monkeypatch):
+    env = ca_environment
+    future_not_after = (
+        (datetime.now(UTC) + timedelta(days=30))
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    args = [
+        "cfms-pki",
+        "revoke",
+        "--serial",
+        "0x1234",
+        "--ca",
+        "ca-one",
+        "--not-after",
+        future_not_after,
+        "--registry-dir",
+        str(env["reg_dir"]),
+    ]
+    monkeypatch.setattr("sys.argv", args)
+    main()
+
+    rev_path = env["reg_dir"] / "revocations.json"
+    data = json.loads(rev_path.read_text(encoding="utf-8"))
+    assert "ca-one" in data["revocations"]
+    assert "1234" in data["revocations"]["ca-one"]
+    assert data["revocations"]["ca-one"]["1234"]["not_after"] == future_not_after
+
+
+def test_revoke_pem_with_expired_not_after_arg(ca_environment, monkeypatch, capsys):
+    env = ca_environment
+    past_not_after = (
+        (datetime.now(UTC) - timedelta(days=2))
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    args = [
+        "cfms-pki",
+        "revoke",
+        "--pem",
+        str(env["leaf1_pem"]),
+        "--not-after",
+        past_not_after,
+        "--registry-dir",
+        str(env["reg_dir"]),
+    ]
+    monkeypatch.setattr("sys.argv", args)
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "expired" in captured.err.lower()

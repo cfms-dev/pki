@@ -146,6 +146,8 @@ def revoke_certificate(args: argparse.Namespace) -> None:
     ca_data = json.loads(ca_registry_path.read_text(encoding="utf-8"))
     cas: dict[str, Any] = ca_data.get("cas", {})
 
+    now = datetime.now(UTC)
+
     serial_hex: str
     default_not_after: str | None = None
     ca_id: str
@@ -154,6 +156,15 @@ def revoke_certificate(args: argparse.Namespace) -> None:
         if not args.pem.exists():
             raise FileNotFoundError(f"Certificate file not found: {args.pem}")
         cert = x509.load_pem_x509_certificate(args.pem.read_bytes())
+        if cert.not_valid_after_utc <= now:
+            expired_str = (
+                cert.not_valid_after_utc.replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+            raise ValueError(
+                f"Cannot revoke expired certificate: certificate expired on {expired_str}."
+            )
         serial_int = cert.serial_number
         serial_hex = f"{serial_int:X}"
         default_not_after = (
@@ -231,25 +242,26 @@ def revoke_certificate(args: argparse.Namespace) -> None:
                 f"Invalid --date '{args.date}': must be valid ISO 8601 date-time."
             ) from exc
     else:
-        revocation_date = (
-            datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        )
+        revocation_date = now.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     # Determine not_after
     not_after_str: str | None = None
     if args.not_after:
         try:
             dt = datetime.fromisoformat(args.not_after)
+            not_after_dt = dt.astimezone(UTC)
             not_after_str = (
-                dt.astimezone(UTC)
-                .replace(microsecond=0)
-                .isoformat()
-                .replace("+00:00", "Z")
+                not_after_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
             )
         except ValueError as exc:
             raise ValueError(
                 f"Invalid --not-after '{args.not_after}': must be valid ISO 8601 date-time."
             ) from exc
+
+        if not_after_dt <= now:
+            raise ValueError(
+                f"Cannot revoke expired certificate: certificate expired on {not_after_str}."
+            )
     elif default_not_after:
         not_after_str = default_not_after
 
