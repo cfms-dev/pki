@@ -7,6 +7,7 @@ export interface AccountRow {
   contact: string | null; // JSON string array of contact URLs
   status: "valid" | "deactivated" | "revoked";
   created_at: number; // unix timestamp seconds
+  terms_of_service?: string | null; // Agreed terms of service URL
 }
 
 export interface OrderRow {

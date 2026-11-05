@@ -25,7 +25,8 @@ export class Database {
             thumbprint TEXT UNIQUE NOT NULL,
             contact TEXT,
             status TEXT NOT NULL,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            terms_of_service TEXT
         );
       `),
       this.db.prepare(`
@@ -84,6 +85,12 @@ export class Database {
       this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_certificates_cert_id ON certificates (cert_id);`),
       this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_certificates_serial ON certificates (serial_number);`),
     ]);
+
+    try {
+      await this.db.prepare("ALTER TABLE accounts ADD COLUMN terms_of_service TEXT;").run();
+    } catch {
+      // Column may already exist
+    }
   }
 
   // --- Nonce Operations ---
@@ -121,7 +128,7 @@ export class Database {
   async saveAccount(account: AccountRow): Promise<void> {
     await this.db
       .prepare(
-        "INSERT INTO accounts (id, jwk, thumbprint, contact, status, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO accounts (id, jwk, thumbprint, contact, status, created_at, terms_of_service) VALUES (?, ?, ?, ?, ?, ?, ?)"
       )
       .bind(
         account.id,
@@ -129,14 +136,19 @@ export class Database {
         account.thumbprint,
         account.contact,
         account.status,
-        account.created_at
+        account.created_at,
+        account.terms_of_service ?? null
       )
       .run();
   }
 
   async updateAccount(
     id: string,
-    updates: { contact?: string | null; status?: "valid" | "deactivated" | "revoked" }
+    updates: {
+      contact?: string | null;
+      status?: "valid" | "deactivated" | "revoked";
+      terms_of_service?: string | null;
+    }
   ): Promise<void> {
     const fields: string[] = [];
     const values: unknown[] = [];
@@ -147,6 +159,10 @@ export class Database {
     if (updates.status !== undefined) {
       fields.push("status = ?");
       values.push(updates.status);
+    }
+    if (updates.terms_of_service !== undefined) {
+      fields.push("terms_of_service = ?");
+      values.push(updates.terms_of_service);
     }
     if (fields.length === 0) return;
     values.push(id);

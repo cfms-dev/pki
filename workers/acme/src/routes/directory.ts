@@ -1,26 +1,46 @@
-import { AcmeEnv, CAA_ISSUER_DOMAIN_NAME, CONFIG } from "../config";
+import {
+  AcmeEnv,
+  getCaaIdentities,
+  getExternalAccountRequired,
+  getTermsOfServiceUrl,
+  getWebsiteUrl,
+} from "../config";
 
 export function handleDirectory(request: Request, env: AcmeEnv, baseUrl: string): Response {
-  const website = (env.WEBSITE_URL as string) || CONFIG.WEBSITE_URL;
-  const termsOfService =
-    (env.TERMS_OF_SERVICE_URL as string) ||
-    CONFIG.TERMS_OF_SERVICE_URL ||
-    `${baseUrl}/terms`;
+  const meta: Record<string, unknown> = {};
 
-  const directory = {
+  const termsOfService = getTermsOfServiceUrl(env);
+  if (termsOfService) {
+    meta.termsOfService = termsOfService;
+  }
+
+  const website = getWebsiteUrl(env);
+  if (website) {
+    meta.website = website;
+  }
+
+  const caaIdentities = getCaaIdentities(env);
+  if (caaIdentities && caaIdentities.length > 0) {
+    meta.caaIdentities = caaIdentities;
+  }
+
+  const externalAccountRequired = getExternalAccountRequired(env);
+  if (externalAccountRequired) {
+    meta.externalAccountRequired = true;
+  }
+
+  const directory: Record<string, unknown> = {
     newNonce: `${baseUrl}/new-nonce`,
     newAccount: `${baseUrl}/new-account`,
     newOrder: `${baseUrl}/new-order`,
     revokeCert: `${baseUrl}/revoke-cert`,
     keyChange: `${baseUrl}/key-change`,
     renewalInfo: `${baseUrl}/renewal-info`, // RFC 9773 ACME Renewal Information
-    meta: {
-      termsOfService,
-      website,
-      caaIdentities: [CAA_ISSUER_DOMAIN_NAME],
-      externalAccountRequired: false,
-    },
   };
+
+  if (Object.keys(meta).length > 0) {
+    directory.meta = meta;
+  }
 
   return new Response(JSON.stringify(directory, null, 2), {
     status: 200,

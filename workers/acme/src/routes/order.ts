@@ -1,4 +1,4 @@
-import { AcmeEnv, CONFIG } from "../config";
+import { AcmeEnv, CONFIG, getTermsOfServiceUrl } from "../config";
 import { generateNonceString } from "../crypto/nonce";
 import { verifyAcmeJws } from "../crypto/jws";
 import { issueCertificateFromCsr, parseAndVerifyCsr } from "../crypto/x509";
@@ -29,6 +29,15 @@ export async function handleNewOrder(
   const verified = await verifyAcmeJws<NewOrderPayload>(request, database, "/new-order");
   if (!verified.account) {
     throw AcmeError.unauthorized("Account required for newOrder");
+  }
+
+  // RFC 8555 § 7.3.3: userActionRequired when terms of service have changed
+  const termsOfServiceUrl = getTermsOfServiceUrl(env);
+  if (termsOfServiceUrl && verified.account.terms_of_service !== termsOfServiceUrl) {
+    throw AcmeError.userActionRequired(
+      "Terms of service have changed",
+      termsOfServiceUrl
+    );
   }
 
   const payload = verified.payload;

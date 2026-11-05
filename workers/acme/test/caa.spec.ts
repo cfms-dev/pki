@@ -45,6 +45,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
       expect(data.meta.caaIdentities).toEqual(["cfms-pki.crpteam.club"]);
       expect(data.meta.caaIdentities[0]).toBe(CAA_ISSUER_DOMAIN_NAME);
       expect(data.meta.website).toBe(CONFIG.WEBSITE_URL);
+      expect((data.meta as any).termsOfService).toBeUndefined();
     });
 
     it("should allow overriding website and termsOfService via env", async () => {

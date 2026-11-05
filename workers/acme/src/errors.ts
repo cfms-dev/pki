@@ -5,12 +5,18 @@ export class AcmeError extends Error {
   public status: number;
   public detail: string;
   public subproblems?: Array<{ type: string; detail: string; identifier?: unknown }>;
+  public instance?: string;
+  public extraHeaders?: Record<string, string>;
+  public termsOfService?: string;
 
   constructor(
     type: string,
     detail: string,
     status = 400,
-    subproblems?: Array<{ type: string; detail: string; identifier?: unknown }>
+    subproblems?: Array<{ type: string; detail: string; identifier?: unknown }>,
+    instance?: string,
+    extraHeaders?: Record<string, string>,
+    termsOfService?: string
   ) {
     super(detail);
     this.name = "AcmeError";
@@ -18,6 +24,9 @@ export class AcmeError extends Error {
     this.status = status;
     this.detail = detail;
     this.subproblems = subproblems;
+    this.instance = instance;
+    this.extraHeaders = extraHeaders;
+    this.termsOfService = termsOfService;
   }
 
   toResponse(headers: Record<string, string> = {}): Response {
@@ -26,15 +35,32 @@ export class AcmeError extends Error {
       detail: this.detail,
       status: this.status,
     };
+    if (this.instance) {
+      body.instance = this.instance;
+    }
+    if (this.termsOfService) {
+      body.termsOfService = this.termsOfService;
+    }
     if (this.subproblems && this.subproblems.length > 0) {
       body.subproblems = this.subproblems;
     }
-    return new Response(JSON.stringify(body), {
+
+    const mergedHeaders = new Headers(headers);
+    mergedHeaders.set("Content-Type", "application/problem+json");
+
+    if (this.extraHeaders) {
+      for (const [k, v] of Object.entries(this.extraHeaders)) {
+        if (k.toLowerCase() === "link" && mergedHeaders.has("link")) {
+          mergedHeaders.append("link", v);
+        } else {
+          mergedHeaders.set(k, v);
+        }
+      }
+    }
+
+    return new Response(JSON.stringify(body, null, 2), {
       status: this.status,
-      headers: {
-        "Content-Type": "application/problem+json",
-        ...headers,
-      },
+      headers: mergedHeaders,
     });
   }
 
@@ -48,6 +74,25 @@ export class AcmeError extends Error {
 
   static unauthorized(detail = "Client is not authorized"): AcmeError {
     return new AcmeError("unauthorized", detail, 403);
+  }
+
+  static userActionRequired(
+    detail = "Terms of service must be agreed to",
+    termsOfServiceUrl?: string
+  ): AcmeError {
+    const extraHeaders: Record<string, string> = {};
+    if (termsOfServiceUrl) {
+      extraHeaders["Link"] = `<${termsOfServiceUrl}>;rel="terms-of-service"`;
+    }
+    return new AcmeError(
+      "userActionRequired",
+      detail,
+      403,
+      undefined,
+      termsOfServiceUrl,
+      extraHeaders,
+      termsOfServiceUrl
+    );
   }
 
   static notFound(detail = "The requested resource does not exist"): AcmeError {

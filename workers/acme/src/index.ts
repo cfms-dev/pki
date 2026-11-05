@@ -119,14 +119,14 @@ async function routeRequest(
   // New Account
   if (path === "/new-account") {
     if (request.method !== "POST") return methodNotAllowed();
-    return await handleNewAccount(request, database, baseUrl);
+    return await handleNewAccount(request, database, baseUrl, env);
   }
 
   // Account
   const accountMatch = path.match(/^\/account\/([a-zA-Z0-9_-]+)$/);
   if (accountMatch) {
     if (request.method !== "POST") return methodNotAllowed();
-    return await handleAccount(request, database, baseUrl, accountMatch[1]);
+    return await handleAccount(request, database, baseUrl, accountMatch[1], env);
   }
 
   // New Order

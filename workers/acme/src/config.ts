@@ -13,6 +13,9 @@ export interface AcmeEnv {
   WEBSITE_URL?: string;
   ARI_EXPLANATION_URL?: string;
   TERMS_OF_SERVICE_URL?: string;
+  CAA_IDENTITIES?: string | string[];
+  CAA_ISSUER_DOMAIN_NAME?: string;
+  EXTERNAL_ACCOUNT_REQUIRED?: string | boolean;
   [key: string]: unknown;
 }
 
@@ -23,6 +26,72 @@ export const CAA_ISSUER_DOMAIN_NAME = "cfms-pki.crpteam.club";
 export const WEBSITE_URL = `https://${CAA_ISSUER_DOMAIN_NAME}`;
 export const ARI_EXPLANATION_URL = `https://${CAA_ISSUER_DOMAIN_NAME}/docs/ari`;
 export const TERMS_OF_SERVICE_URL = "";
+export const CAA_IDENTITIES: string[] | undefined = [CAA_ISSUER_DOMAIN_NAME];
+export const EXTERNAL_ACCOUNT_REQUIRED = false;
+
+/**
+ * Resolves the termsOfService URL per RFC 8555 § 7.1.1.
+ * If not specified, returns undefined (omitted from response).
+ */
+export function getTermsOfServiceUrl(env?: AcmeEnv): string | undefined {
+  const envVal = typeof env?.TERMS_OF_SERVICE_URL === "string" ? env.TERMS_OF_SERVICE_URL.trim() : "";
+  const configVal = typeof CONFIG.TERMS_OF_SERVICE_URL === "string" ? CONFIG.TERMS_OF_SERVICE_URL.trim() : "";
+  return envVal || configVal || undefined;
+}
+
+/**
+ * Resolves the website URL per RFC 8555 § 7.1.1.
+ * If not specified or explicitly set to empty, returns undefined.
+ */
+export function getWebsiteUrl(env?: AcmeEnv): string | undefined {
+  if (env?.WEBSITE_URL === "") return undefined;
+  const envVal = typeof env?.WEBSITE_URL === "string" ? env.WEBSITE_URL.trim() : "";
+  const configVal = typeof CONFIG.WEBSITE_URL === "string" ? CONFIG.WEBSITE_URL.trim() : "";
+  return envVal || configVal || undefined;
+}
+
+/**
+ * Resolves the caaIdentities array per RFC 8555 § 7.1.1.
+ * If not specified or empty, returns undefined.
+ */
+export function getCaaIdentities(env?: AcmeEnv): string[] | undefined {
+  if (env?.CAA_IDENTITIES === "") return undefined;
+  if (Array.isArray(env?.CAA_IDENTITIES)) {
+    const list = env.CAA_IDENTITIES.filter(Boolean);
+    return list.length > 0 ? list : undefined;
+  }
+  if (typeof env?.CAA_IDENTITIES === "string") {
+    const list = env.CAA_IDENTITIES.split(",").map((s) => s.trim()).filter(Boolean);
+    return list.length > 0 ? list : undefined;
+  }
+  if (env?.CAA_ISSUER_DOMAIN_NAME !== undefined) {
+    const domain = typeof env.CAA_ISSUER_DOMAIN_NAME === "string" ? env.CAA_ISSUER_DOMAIN_NAME.trim() : "";
+    return domain ? [domain] : undefined;
+  }
+  if (Array.isArray(CONFIG.CAA_IDENTITIES)) {
+    const list = CONFIG.CAA_IDENTITIES.filter(Boolean);
+    return list.length > 0 ? list : undefined;
+  }
+  if (CONFIG.CAA_ISSUER_DOMAIN_NAME) {
+    const domain = CONFIG.CAA_ISSUER_DOMAIN_NAME.trim();
+    return domain ? [domain] : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Resolves the externalAccountRequired flag per RFC 8555 § 7.1.1.
+ * Returns true only if explicitly set to true. Default is false (omitted from meta).
+ */
+export function getExternalAccountRequired(env?: AcmeEnv): boolean {
+  if (env?.EXTERNAL_ACCOUNT_REQUIRED === true || env?.EXTERNAL_ACCOUNT_REQUIRED === "true") {
+    return true;
+  }
+  if (CONFIG.EXTERNAL_ACCOUNT_REQUIRED === true) {
+    return true;
+  }
+  return false;
+}
 
 export const CONFIG = {
   // Authoritative Global CAA Issuer Domain Name
@@ -32,6 +101,8 @@ export const CONFIG = {
   WEBSITE_URL,
   ARI_EXPLANATION_URL,
   TERMS_OF_SERVICE_URL,
+  CAA_IDENTITIES,
+  EXTERNAL_ACCOUNT_REQUIRED,
 
   // RFC 8555 defaults
   DEFAULT_CERT_VALIDITY_DAYS: 90,
