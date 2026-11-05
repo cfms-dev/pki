@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as x509 from "@peculiar/x509";
-import { CAA_ISSUER_DOMAIN_NAME, CONFIG, AcmeEnv } from "../src/config";
+import { CAA_ISSUER_DOMAIN_NAME, CONFIG, AcmeEnv, getCaaIssuerDomainName } from "../src/config";
 import { handleDirectory } from "../src/routes/directory";
 import {
   CaaRecord,
@@ -66,6 +66,63 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
       };
       expect(data.meta.website).toBe("https://custom.example.org");
       expect(data.meta.termsOfService).toBe("https://custom.example.org/tos");
+    });
+
+    it("should resolve CAA_ISSUER_DOMAIN_NAME via getCaaIssuerDomainName and allow env override", () => {
+      expect(getCaaIssuerDomainName()).toBe("cfms-pki.crpteam.club");
+      expect(getCaaIssuerDomainName({ DB: createMockD1Database() })).toBe("cfms-pki.crpteam.club");
+      expect(
+        getCaaIssuerDomainName({
+          DB: createMockD1Database(),
+          CAA_ISSUER_DOMAIN_NAME: "custom-caa.example.com",
+        })
+      ).toBe("custom-caa.example.com");
+    });
+
+    it("should allow overriding CAA_ISSUER_DOMAIN_NAME in ACME Directory meta.caaIdentities via env", async () => {
+      const customEnv: AcmeEnv = {
+        DB: createMockD1Database(),
+        CAA_ISSUER_DOMAIN_NAME: "custom-caa.example.com",
+      };
+      const resp = handleDirectory(
+        new Request("https://acme.test/directory"),
+        customEnv,
+        "https://acme.test"
+      );
+      expect(resp.status).toBe(200);
+
+      const data = (await resp.json()) as {
+        meta: { caaIdentities: string[] };
+      };
+      expect(data.meta.caaIdentities).toEqual(["custom-caa.example.com"]);
+    });
+
+    it("should validate CAA for order according to CAA_ISSUER_DOMAIN_NAME in env", async () => {
+      const customEnv: AcmeEnv = {
+        DB: createMockD1Database(),
+        CAA_ISSUER_DOMAIN_NAME: "custom-caa.example.com",
+      };
+
+      // Mock DNS responses: custom-caa.example.com is permitted, cfms-pki is not in the record
+      const mockFetch = async () =>
+        new Response(
+          JSON.stringify({
+            Status: 0,
+            Answer: [{ type: 257, data: '0 issue "custom-caa.example.com"' }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/dns-json" } }
+        );
+
+      // Should succeed with customEnv
+      await expect(
+        validateCaaForOrder(["example.org"], "https://acme.test/account/1", customEnv, mockFetch)
+      ).resolves.toBeUndefined();
+
+      // Should fail with default env because record is for custom-caa.example.com
+      const defaultEnv: AcmeEnv = { DB: createMockD1Database() };
+      await expect(
+        validateCaaForOrder(["example.org"], "https://acme.test/account/1", defaultEnv, mockFetch)
+      ).rejects.toThrow("CAA issue record forbids issuance for domain by 'cfms-pki.crpteam.club'");
     });
   });
 

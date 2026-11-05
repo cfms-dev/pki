@@ -30,6 +30,18 @@ export const CAA_IDENTITIES: string[] | undefined = [CAA_ISSUER_DOMAIN_NAME];
 export const EXTERNAL_ACCOUNT_REQUIRED = false;
 
 /**
+ * Resolves the authoritative CAA issuer domain name per RFC 8659.
+ * Fallback to CONFIG.CAA_ISSUER_DOMAIN_NAME or default constant if not set.
+ */
+export function getCaaIssuerDomainName(env?: AcmeEnv): string {
+  if (typeof env?.CAA_ISSUER_DOMAIN_NAME === "string" && env.CAA_ISSUER_DOMAIN_NAME.trim()) {
+    return env.CAA_ISSUER_DOMAIN_NAME.trim();
+  }
+  const configVal = typeof CONFIG.CAA_ISSUER_DOMAIN_NAME === "string" ? CONFIG.CAA_ISSUER_DOMAIN_NAME.trim() : "";
+  return configVal || CAA_ISSUER_DOMAIN_NAME;
+}
+
+/**
  * Resolves the termsOfService URL per RFC 8555 § 7.1.1.
  * If not specified, returns undefined (omitted from response).
  */
