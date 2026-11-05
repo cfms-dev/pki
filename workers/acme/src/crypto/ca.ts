@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import "reflect-metadata";
 import * as x509 from "@peculiar/x509";
 import { AcmeEnv, CONFIG } from "../config";
 import { AcmeError } from "../errors";
@@ -42,7 +43,7 @@ export async function importCaPrivateKey(pkPem: string): Promise<CryptoKey> {
   try {
     return await crypto.subtle.importKey(
       "pkcs8",
-      der.buffer,
+      der,
       { name: "ECDSA", namedCurve: "P-256" },
       false,
       ["sign"]
@@ -52,7 +53,7 @@ export async function importCaPrivateKey(pkPem: string): Promise<CryptoKey> {
     try {
       return await crypto.subtle.importKey(
         "pkcs8",
-        der.buffer,
+        der,
         { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
         false,
         ["sign"]
@@ -62,7 +63,7 @@ export async function importCaPrivateKey(pkPem: string): Promise<CryptoKey> {
       try {
         return await crypto.subtle.importKey(
           "pkcs8",
-          der.buffer,
+          der,
           { name: "Ed25519" },
           false,
           ["sign"]

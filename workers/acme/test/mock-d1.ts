@@ -35,7 +35,7 @@ function createPreparedStatement(
     },
     async first<T = unknown>(colName?: string): Promise<T | null> {
       const stmt = db.prepare(query);
-      const row = stmt.get(...params) as Record<string, unknown> | undefined;
+      const row = stmt.get(...(params as any[])) as Record<string, unknown> | undefined;
       if (!row) return null;
       if (colName) {
         return (row[colName] as T) ?? null;
@@ -44,7 +44,7 @@ function createPreparedStatement(
     },
     async all<T = unknown>(): Promise<D1Result<T>> {
       const stmt = db.prepare(query);
-      const results = stmt.all(...params) as T[];
+      const results = stmt.all(...(params as any[])) as T[];
       return {
         results,
         success: true,
@@ -57,7 +57,7 @@ function createPreparedStatement(
     },
     async run<T = unknown>(): Promise<D1Result<T>> {
       const stmt = db.prepare(query);
-      const result = stmt.run(...params);
+      const result = stmt.run(...(params as any[]));
       return {
         results: [],
         success: true,
@@ -72,7 +72,7 @@ function createPreparedStatement(
     },
     async raw<T = unknown>(): Promise<T[]> {
       const stmt = db.prepare(query);
-      return stmt.all(...params) as T[];
+      return stmt.all(...(params as any[])) as T[];
     },
   } as unknown as D1PreparedStatement;
 }

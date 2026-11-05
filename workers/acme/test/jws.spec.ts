@@ -47,11 +47,11 @@ describe("JWS & Nonce Cryptography", () => {
   });
 
   it("should sign and verify ACME JWS payload with ES256", async () => {
-    const keyPair = await crypto.subtle.generateKey(
+    const keyPair = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
-    );
+    )) as CryptoKeyPair;
     const jwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
 
     const nonce = await createAndSaveNonce(db);

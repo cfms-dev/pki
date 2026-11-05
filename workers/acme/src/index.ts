@@ -1,3 +1,4 @@
+import "reflect-metadata";
 import { AcmeEnv } from "./config";
 import { Database } from "./db/queries";
 import { AcmeError } from "./errors";

@@ -481,11 +481,11 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
   describe("5. Intermediate CA Pool & Unified CAA Identity Integration", () => {
     it("should enforce certificate validity and exclude expired or non-CA certificates", async () => {
       // 1. Valid CA
-      const keys = await crypto.subtle.generateKey(
+      const keys = (await crypto.subtle.generateKey(
         { name: "ECDSA", namedCurve: "P-256" },
         true,
         ["sign", "verify"]
-      );
+      )) as CryptoKeyPair;
       const now = new Date();
 
       const validCert = await x509.X509CertificateGenerator.create({
@@ -498,7 +498,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
         signingKey: keys.privateKey,
         signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
         extensions: [
-          new x509.BasicConstraintsExtension(true, true),
+          new x509.BasicConstraintsExtension(true, undefined, true),
           new x509.KeyUsagesExtension(x509.KeyUsageFlags.keyCertSign | x509.KeyUsageFlags.cRLSign),
         ],
       });
@@ -523,7 +523,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
         publicKey: keys.publicKey,
         signingKey: keys.privateKey,
         signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
-        extensions: [new x509.BasicConstraintsExtension(true, true)],
+        extensions: [new x509.BasicConstraintsExtension(true, undefined, true)],
       });
       const checkExpired = validateIntermediateCaCertificate(caEntry, expiredCert.toString("pem"), now);
       expect(checkExpired.eligible).toBe(false);
@@ -539,7 +539,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
         publicKey: keys.publicKey,
         signingKey: keys.privateKey,
         signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
-        extensions: [new x509.BasicConstraintsExtension(false, true)],
+        extensions: [new x509.BasicConstraintsExtension(false, undefined, true)],
       });
       const checkNotCa = validateIntermediateCaCertificate(caEntry, leafCert.toString("pem"), now);
       expect(checkNotCa.eligible).toBe(false);
@@ -556,7 +556,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
         signingKey: keys.privateKey,
         signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
         extensions: [
-          new x509.BasicConstraintsExtension(true, true),
+          new x509.BasicConstraintsExtension(true, undefined, true),
           new x509.KeyUsagesExtension(x509.KeyUsageFlags.digitalSignature), // missing keyCertSign
         ],
       });
@@ -587,12 +587,12 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
       database = new Database(d1);
       await database.initSchema();
 
-      accountKeys = await crypto.subtle.generateKey(
+      accountKeys = (await crypto.subtle.generateKey(
         { name: "ECDSA", namedCurve: "P-256" },
         true,
         ["sign", "verify"]
-      );
-      accountJwk = await crypto.subtle.exportKey("jwk", accountKeys.publicKey);
+      )) as CryptoKeyPair;
+      accountJwk = (await crypto.subtle.exportKey("jwk", accountKeys.publicKey)) as JsonWebKey;
       accountThumbprint = await calculateJwkThumbprint(accountJwk);
       accountId = crypto.randomUUID();
 
@@ -605,11 +605,11 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
         created_at: Math.floor(Date.now() / 1000),
       });
 
-      caKeys = await crypto.subtle.generateKey(
+      caKeys = (await crypto.subtle.generateKey(
         { name: "ECDSA", namedCurve: "P-256" },
         true,
         ["sign", "verify"]
-      );
+      )) as CryptoKeyPair;
       const caCert = await x509.X509CertificateGenerator.create({
         serialNumber: "1234567890abcdef",
         subject: "CN=CFMS Intermediate CA 1, O=CFMS",
@@ -620,13 +620,13 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
         signingKey: caKeys.privateKey,
         signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
         extensions: [
-          new x509.BasicConstraintsExtension(true, true),
+          new x509.BasicConstraintsExtension(true, undefined, true),
           await x509.SubjectKeyIdentifierExtension.create(caKeys.publicKey),
         ],
       });
       caCertPem = caCert.toString("pem");
       const pkcs8Der = await crypto.subtle.exportKey("pkcs8", caKeys.privateKey);
-      caPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(pkcs8Der).toString("base64")}\n-----END PRIVATE KEY-----`;
+      caPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(pkcs8Der as ArrayBuffer).toString("base64")}\n-----END PRIVATE KEY-----`;
     });
 
     async function createSignedJwsRequest(
@@ -694,11 +694,11 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
         created_at: Math.floor(Date.now() / 1000),
       });
 
-      const clientKeys = await crypto.subtle.generateKey(
+      const clientKeys = (await crypto.subtle.generateKey(
         { name: "ECDSA", namedCurve: "P-256" },
         true,
         ["sign", "verify"]
-      );
+      )) as CryptoKeyPair;
       const csr = await x509.Pkcs10CertificateRequestGenerator.create({
         name: `CN=${domain}`,
         keys: clientKeys,
@@ -798,11 +798,11 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
         created_at: Math.floor(Date.now() / 1000),
       });
 
-      const clientKeys = await crypto.subtle.generateKey(
+      const clientKeys = (await crypto.subtle.generateKey(
         { name: "ECDSA", namedCurve: "P-256" },
         true,
         ["sign", "verify"]
-      );
+      )) as CryptoKeyPair;
       const csr = await x509.Pkcs10CertificateRequestGenerator.create({
         name: `CN=${domain}`,
         keys: clientKeys,

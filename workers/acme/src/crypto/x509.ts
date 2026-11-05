@@ -1,3 +1,4 @@
+import "reflect-metadata";
 import * as x509 from "@peculiar/x509";
 import { AcmeEnv, CONFIG } from "../config";
 import { AcmeError } from "../errors";
@@ -45,7 +46,7 @@ export async function parseAndVerifyCsr(csrBase64Url: string): Promise<ParsedCsr
 
   let csr: x509.Pkcs10CertificateRequest;
   try {
-    csr = new x509.Pkcs10CertificateRequest(derBytes.buffer);
+    csr = new x509.Pkcs10CertificateRequest(derBytes);
   } catch (err: unknown) {
     throw AcmeError.badCSR(`Failed to parse PKCS#10 CSR: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -85,7 +86,7 @@ export async function parseAndVerifyCsr(csrBase64Url: string): Promise<ParsedCsr
   return {
     csr,
     domains,
-    publicKey: csr.publicKey,
+    publicKey: await csr.publicKey.export(),
   };
 }
 
@@ -145,7 +146,7 @@ export async function issueCertificateFromCsr(
   const sanNames = authorizedDomains.map((d) => ({ type: "dns" as const, value: d }));
 
   const extensions: x509.Extension[] = [
-    new x509.BasicConstraintsExtension(false, true),
+    new x509.BasicConstraintsExtension(false, undefined, true),
     new x509.KeyUsagesExtension(
       x509.KeyUsageFlags.digitalSignature | x509.KeyUsageFlags.keyEncipherment,
       true

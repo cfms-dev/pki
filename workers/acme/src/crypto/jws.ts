@@ -190,7 +190,7 @@ export async function verifyAcmeJws<T = unknown>(
   const signingInput = new TextEncoder().encode(`${body.protected}.${body.payload}`);
   const signatureBytes = base64UrlDecode(body.signature);
 
-  let verifyAlg: AlgorithmIdentifier | RsaPssParams | EcdsaParams;
+  let verifyAlg: { name: string; hash?: string };
   if (header.alg === "ES256") {
     verifyAlg = { name: "ECDSA", hash: "SHA-256" };
   } else if (header.alg === "RS256") {
@@ -201,7 +201,7 @@ export async function verifyAcmeJws<T = unknown>(
     throw AcmeError.malformed(`Unsupported alg: ${header.alg}`);
   }
 
-  const isValid = await crypto.subtle.verify(verifyAlg, cryptoKey, signatureBytes as Uint8Array, signingInput);
+  const isValid = await crypto.subtle.verify(verifyAlg, cryptoKey, signatureBytes, signingInput);
   if (!isValid) {
     throw AcmeError.unauthorized("Invalid JWS signature");
   }

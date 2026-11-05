@@ -10,11 +10,11 @@ import { createMockD1Database } from "./mock-d1";
 
 describe("X.509 Certificate Issuance & CSR Handling", () => {
   it("should parse and verify PKCS#10 CSR", async () => {
-    const clientKeys = await crypto.subtle.generateKey(
+    const clientKeys = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
-    );
+    )) as CryptoKeyPair;
 
     const csrObj = await x509.Pkcs10CertificateRequestGenerator.create({
       name: "CN=example.com",
@@ -38,11 +38,11 @@ describe("X.509 Certificate Issuance & CSR Handling", () => {
 
   it("should issue a 90-day leaf certificate signed by intermediate CA", async () => {
     // 1. Generate an Intermediate CA key pair for testing
-    const caKeys = await crypto.subtle.generateKey(
+    const caKeys = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
-    );
+    )) as CryptoKeyPair;
     const caCert = await x509.X509CertificateGenerator.create({
       serialNumber: "0102030405060708090a",
       subject: "CN=CFMS Intermediate CA, O=CFMS",
@@ -53,22 +53,22 @@ describe("X.509 Certificate Issuance & CSR Handling", () => {
       signingKey: caKeys.privateKey,
       signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
       extensions: [
-        new x509.BasicConstraintsExtension(true, true),
+        new x509.BasicConstraintsExtension(true, undefined, true),
         await x509.SubjectKeyIdentifierExtension.create(caKeys.publicKey),
       ],
     });
 
     // Export CA private key to PKCS#8 PEM
     const pkcs8Der = await crypto.subtle.exportKey("pkcs8", caKeys.privateKey);
-    const pkcs8B64 = Buffer.from(pkcs8Der).toString("base64");
+    const pkcs8B64 = Buffer.from(pkcs8Der as ArrayBuffer).toString("base64");
     const caKeyPem = `-----BEGIN PRIVATE KEY-----\n${pkcs8B64}\n-----END PRIVATE KEY-----`;
 
     // 2. Generate a client CSR
-    const clientKeys = await crypto.subtle.generateKey(
+    const clientKeys = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
-    );
+    )) as CryptoKeyPair;
     const csr = await x509.Pkcs10CertificateRequestGenerator.create({
       name: "CN=app.example.com",
       keys: clientKeys,

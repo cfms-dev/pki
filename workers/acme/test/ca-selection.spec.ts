@@ -58,13 +58,13 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
 
   it("should select the single available intermediate CA when private key is present", async () => {
     // Generate dummy key
-    const keys = await crypto.subtle.generateKey(
+    const keys = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
-    );
+    )) as CryptoKeyPair;
     const pkcs8Der = await crypto.subtle.exportKey("pkcs8", keys.privateKey);
-    const pkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(pkcs8Der).toString("base64")}\n-----END PRIVATE KEY-----`;
+    const pkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(pkcs8Der as ArrayBuffer).toString("base64")}\n-----END PRIVATE KEY-----`;
 
     const env: AcmeEnv = {
       DB: createMockD1Database(),
@@ -119,19 +119,19 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
 
   it("should perform weighted random selection across multiple candidate CAs", async () => {
     // Generate two mock CAs
-    const caAKeys = await crypto.subtle.generateKey(
+    const caAKeys = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
-    );
-    const caBKeys = await crypto.subtle.generateKey(
+    )) as CryptoKeyPair;
+    const caBKeys = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
-    );
+    )) as CryptoKeyPair;
 
-    const caAPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(await crypto.subtle.exportKey("pkcs8", caAKeys.privateKey)).toString("base64")}\n-----END PRIVATE KEY-----`;
-    const caBPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(await crypto.subtle.exportKey("pkcs8", caBKeys.privateKey)).toString("base64")}\n-----END PRIVATE KEY-----`;
+    const caAPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from((await crypto.subtle.exportKey("pkcs8", caAKeys.privateKey)) as ArrayBuffer).toString("base64")}\n-----END PRIVATE KEY-----`;
+    const caBPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from((await crypto.subtle.exportKey("pkcs8", caBKeys.privateKey)) as ArrayBuffer).toString("base64")}\n-----END PRIVATE KEY-----`;
 
     const candidates: IntermediateCaEntry[] = [
       { id: "ca-alpha", certFile: "generic-intermediate.pem", pkEnv: "PK_ALPHA", weight: 3 }, // 75%
@@ -167,11 +167,11 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
 
   it("should issue a certificate using the dynamically selected Intermediate CA", async () => {
     // Create an intermediate CA
-    const caKeys = await crypto.subtle.generateKey(
+    const caKeys = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
-    );
+    )) as CryptoKeyPair;
 
     const caCert = await x509.X509CertificateGenerator.create({
       serialNumber: "0102030405060708090b",
@@ -183,18 +183,18 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
       signingKey: caKeys.privateKey,
       signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
       extensions: [
-        new x509.BasicConstraintsExtension(true, true),
+        new x509.BasicConstraintsExtension(true, undefined, true),
         await x509.SubjectKeyIdentifierExtension.create(caKeys.publicKey),
       ],
     });
 
-    const caPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(await crypto.subtle.exportKey("pkcs8", caKeys.privateKey)).toString("base64")}\n-----END PRIVATE KEY-----`;
+    const caPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from((await crypto.subtle.exportKey("pkcs8", caKeys.privateKey)) as ArrayBuffer).toString("base64")}\n-----END PRIVATE KEY-----`;
 
-    const clientKeys = await crypto.subtle.generateKey(
+    const clientKeys = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
-    );
+    )) as CryptoKeyPair;
     const csr = await x509.Pkcs10CertificateRequestGenerator.create({
       name: "CN=service.example.org",
       keys: clientKeys,
@@ -231,11 +231,11 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
   });
 
   it("should automatically skip expired intermediate CAs during selection", async () => {
-    const expiredKeys = await crypto.subtle.generateKey(
+    const expiredKeys = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
-    );
+    )) as CryptoKeyPair;
     const expiredCert = await x509.X509CertificateGenerator.create({
       serialNumber: "0102030405060708090c",
       subject: "CN=Expired Intermediate CA, O=CFMS",
@@ -246,11 +246,11 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
       signingKey: expiredKeys.privateKey,
       signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
       extensions: [
-        new x509.BasicConstraintsExtension(true, true),
+        new x509.BasicConstraintsExtension(true, undefined, true),
         new x509.KeyUsagesExtension(x509.KeyUsageFlags.keyCertSign),
       ],
     });
-    const expiredPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(await crypto.subtle.exportKey("pkcs8", expiredKeys.privateKey)).toString("base64")}\n-----END PRIVATE KEY-----`;
+    const expiredPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from((await crypto.subtle.exportKey("pkcs8", expiredKeys.privateKey)) as ArrayBuffer).toString("base64")}\n-----END PRIVATE KEY-----`;
 
     const env: AcmeEnv = {
       DB: createMockD1Database(),

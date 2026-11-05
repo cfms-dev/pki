@@ -4,22 +4,26 @@
   "description": "Cloudflare Workers ACME (RFC 8555 + RFC 9773 ARI) server for CFMS PKI",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "build:cas": "node scripts/bundle-cas.mjs",
-    "predev": "npm run build:cas",
-    "predeploy": "npm run build:cas",
     "pretest": "npm run build:cas",
+    "types": "wrangler types",
+    "typecheck": "tsc --noEmit",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "vitest run"
   },
   "dependencies": {
-    "@peculiar/x509": "^1.13.0"
+    "@peculiar/x509": "^3.1.0",
+    "reflect-metadata": "^0.2.2"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250204.0",
-    "typescript": "^5.7.3",
-    "vitest": "^3.0.5",
-    "wrangler": "^3.114.0"
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0",
+    "wrangler": "^4.157.0"
   }
 }

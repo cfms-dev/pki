@@ -16,11 +16,11 @@ describe("ACME RFC 8555 & RFC 9773 ARI End-to-End Suite", () => {
 
   beforeEach(async () => {
     // Generate CA key pair and cert
-    caKeys = await crypto.subtle.generateKey(
+    caKeys = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
-    );
+    )) as CryptoKeyPair;
 
     const caCert = await x509.X509CertificateGenerator.create({
       serialNumber: "0102030405060708090a",
@@ -32,14 +32,14 @@ describe("ACME RFC 8555 & RFC 9773 ARI End-to-End Suite", () => {
       signingKey: caKeys.privateKey,
       signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
       extensions: [
-        new x509.BasicConstraintsExtension(true, true),
+        new x509.BasicConstraintsExtension(true, undefined, true),
         await x509.SubjectKeyIdentifierExtension.create(caKeys.publicKey),
       ],
     });
 
     caCertPem = caCert.toString("pem");
     const pkcs8Der = await crypto.subtle.exportKey("pkcs8", caKeys.privateKey);
-    caKeyPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(pkcs8Der).toString("base64")}\n-----END PRIVATE KEY-----`;
+    caKeyPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(pkcs8Der as ArrayBuffer).toString("base64")}\n-----END PRIVATE KEY-----`;
 
     env = {
       DB: createMockD1Database(),
@@ -133,12 +133,12 @@ describe("ACME RFC 8555 & RFC 9773 ARI End-to-End Suite", () => {
     // -------------------------------------------------------------
     // 2. Create Account
     // -------------------------------------------------------------
-    const accountKeys = await crypto.subtle.generateKey(
+    const accountKeys = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
-    );
-    const accountJwk = await crypto.subtle.exportKey("jwk", accountKeys.publicKey);
+    )) as CryptoKeyPair;
+    const accountJwk = (await crypto.subtle.exportKey("jwk", accountKeys.publicKey)) as JsonWebKey;
     const accountThumbprint = await calculateJwkThumbprint(accountJwk);
 
     const accRes = await makeJwsRequest(
@@ -230,11 +230,11 @@ describe("ACME RFC 8555 & RFC 9773 ARI End-to-End Suite", () => {
     expect(readyOrder.status).toBe("ready");
     nonce = getOrderRes.nextNonce;
 
-    const certKeys = await crypto.subtle.generateKey(
+    const certKeys = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
-    );
+    )) as CryptoKeyPair;
     const csr = await x509.Pkcs10CertificateRequestGenerator.create({
       name: "CN=example.com",
       keys: certKeys,
@@ -342,6 +342,7 @@ describe("ACME RFC 8555 & RFC 9773 ARI End-to-End Suite", () => {
       status: string;
       replaces: string;
       authorizations: string[];
+      finalize: string;
     };
     expect(renewalOrder.replaces).toBe(certId);
     expect(renewalOrder.status).toBe("pending");
@@ -401,7 +402,7 @@ describe("ACME RFC 8555 & RFC 9773 ARI End-to-End Suite", () => {
 
     // Finalize renewed order
     const renewFinalizeRes = await makeJwsRequest(
-      (renewalOrder as { finalize: string }).finalize,
+      renewalOrder.finalize,
       { csr: csrB64 },
       accountKeys,
       { kid },

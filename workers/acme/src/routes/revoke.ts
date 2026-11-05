@@ -1,3 +1,4 @@
+import "reflect-metadata";
 import * as x509 from "@peculiar/x509";
 import { verifyAcmeJws } from "../crypto/jws";
 import { base64UrlDecode } from "../crypto/nonce";
@@ -40,7 +41,7 @@ export async function handleRevokeCert(
 
   let cert: x509.X509Certificate;
   try {
-    cert = new x509.X509Certificate(derBytes.buffer);
+    cert = new x509.X509Certificate(derBytes);
   } catch {
     throw AcmeError.malformed("Invalid certificate in revoke payload");
   }

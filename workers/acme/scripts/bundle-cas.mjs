@@ -41,6 +41,8 @@ const manifest = {
   bundledAt: new Date().toISOString(),
 };
 
+let fileChanged = false;
+
 if (caJsonPath) {
   console.log(`[bundle-cas] Reading CA registry from ${caJsonPath}`);
   try {
@@ -62,8 +64,22 @@ if (caJsonPath) {
       const certFileName = path.basename(certSrcPath);
       const certDestPath = path.resolve(targetCaDir, certFileName);
 
-      fs.copyFileSync(certSrcPath, certDestPath);
-      console.log(`[bundle-cas] Copied ${certSrcPath} -> ${certDestPath}`);
+      let isIdentical = false;
+      if (fs.existsSync(certDestPath)) {
+        try {
+          const srcBuf = fs.readFileSync(certSrcPath);
+          const destBuf = fs.readFileSync(certDestPath);
+          isIdentical = srcBuf.equals(destBuf);
+        } catch {
+          isIdentical = false;
+        }
+      }
+
+      if (!isIdentical) {
+        fs.copyFileSync(certSrcPath, certDestPath);
+        console.log(`[bundle-cas] Copied ${certSrcPath} -> ${certDestPath}`);
+        fileChanged = true;
+      }
 
       manifest.cas[caId] = {
         id: caId,
@@ -88,7 +104,23 @@ if (caJsonPath) {
   }
 }
 
-// Write manifest.json into target directory
+// Write manifest.json into target directory only if content changed
 const manifestPath = path.resolve(targetCaDir, "manifest.json");
-fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
-console.log(`[bundle-cas] Successfully generated ${manifestPath} with ${Object.keys(manifest.cas).length} CA(s).`);
+let shouldWriteManifest = true;
+
+if (!fileChanged && fs.existsSync(manifestPath)) {
+  try {
+    const existing = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+    if (JSON.stringify(existing.cas) === JSON.stringify(manifest.cas)) {
+      shouldWriteManifest = false;
+      console.log(`[bundle-cas] Intermediate CAs are already up-to-date in ${targetCaDir}.`);
+    }
+  } catch {
+    shouldWriteManifest = true;
+  }
+}
+
+if (shouldWriteManifest) {
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
+  console.log(`[bundle-cas] Successfully generated ${manifestPath} with ${Object.keys(manifest.cas).length} CA(s).`);
+}
