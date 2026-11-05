@@ -19,6 +19,25 @@ binding = "DB"
 database_name = "cfms-acme-db"
 database_id = "37fed2ac-a473-4d61-9303-ae30991b2d53"
 
+[observability]
+enabled = false
+head_sampling_rate = 1
+redact_query_string = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
+[observability.issues]
+enabled = true
+
 [vars]
 CERT_VALIDITY_DAYS = "90"
 RENEWAL_WINDOW_DAYS = "30"
