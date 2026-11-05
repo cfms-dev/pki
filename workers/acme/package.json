@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build:cas": "node scripts/bundle-cas.mjs",
+    "build": "npm run build:cas",
     "generate:types": "wrangler types",
     "pretypecheck": "npm run generate:types",
     "typecheck": "tsc --noEmit",

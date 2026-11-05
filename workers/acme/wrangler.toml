@@ -2,6 +2,10 @@ name = "pki"
 main = "src/index.ts"
 compatibility_date = "2026-11-05"
 
+find_additional_modules = true
+preserve_file_names = true
+base_dir = "cas"
+
 [build]
 command = "node scripts/bundle-cas.mjs"
 

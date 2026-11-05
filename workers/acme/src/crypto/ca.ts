@@ -18,6 +18,22 @@ export interface SelectedIntermediateCa {
   privateKey: CryptoKey;
 }
 
+function validateCaFileName(fileName: string): void {
+  if (!/^[a-zA-Z0-9_.-]+$/.test(fileName) || fileName.includes("..")) {
+    throw AcmeError.serverInternal(`Invalid intermediate CA filename '${fileName}'`);
+  }
+}
+
+function readCaFile(fileName: string, caDir: string): string {
+  validateCaFileName(fileName);
+
+  // Wrangler bundles files from base_dir = "cas" under their original names.
+  const filePath = fs.existsSync("/bundle")
+    ? path.posix.join("/bundle", fileName)
+    : path.resolve(caDir, fileName);
+  return fs.readFileSync(filePath, "utf-8");
+}
+
 /**
  * Converts a PEM string (PKCS#8 / Certificate) to raw DER bytes
  */
@@ -77,150 +93,63 @@ export async function importCaPrivateKey(pkPem: string): Promise<CryptoKey> {
   }
 }
 
-/**
- * Attempts to read a CA certificate from the designated directory.
- * Searches candidate locations in order:
- * 1. env.CA_CERT_PEM override (for isolated unit tests)
- * 2. Designated directory path
- * 3. Cloudflare Workers Virtual File System (/bundle/<caDir>/...)
- * 4. Fallback paths (process.cwd, parent directories)
- */
+/** Reads a bundled CA certificate, or an explicit test override. */
 export function readCaCertPem(
   ca: IntermediateCaEntry,
   caDir = CONFIG.CA_DIR,
   env?: AcmeEnv
 ): string {
-  // Allow explicit test override
-  if (env?.CA_CERT_PEM && typeof env.CA_CERT_PEM === "string" && env.CA_CERT_PEM.trim()) {
-    // If CA_ID matches or only generic intermediate, return test PEM
-    if (!env.CA_ID || env.CA_ID === ca.id) {
-      return env.CA_CERT_PEM.trim();
-    }
+  let pem: string;
+  try {
+    const override = typeof env?.CA_CERT_PEM === "string" ? env.CA_CERT_PEM.trim() : "";
+    pem = override && (!env?.CA_ID || env.CA_ID === ca.id)
+      ? override
+      : readCaFile(ca.certFile, caDir).trim();
+  } catch (err) {
+    throw AcmeError.serverInternal(
+      `Failed to read Intermediate CA certificate for '${ca.id}': ${err instanceof Error ? err.message : String(err)}`
+    );
   }
 
-  const candidatePaths: string[] = [
-    // Direct path in designated directory
-    path.resolve(caDir, ca.certFile),
-    path.join(caDir, ca.certFile),
-    // Cloudflare Workers VFS bundle paths
-    `/bundle/${caDir}/${ca.certFile}`,
-    `/bundle/${ca.certFile}`,
-    // Relative to process working directory
-    path.resolve(process.cwd(), caDir, ca.certFile),
-    path.resolve(process.cwd(), "cas", ca.certFile),
-    path.resolve(process.cwd(), "certs", ca.certFile),
-    path.resolve(process.cwd(), "../../certs", ca.certFile),
-    // Relative to file directory
-    path.resolve(__dirname, "../../cas", ca.certFile),
-    path.resolve(__dirname, "../../../certs", ca.certFile),
-  ];
-
-  for (const candidate of candidatePaths) {
-    try {
-      if (fs.existsSync(candidate)) {
-        const content = fs.readFileSync(candidate, "utf-8").trim();
-        if (content.includes("-----BEGIN CERTIFICATE-----")) {
-          return content;
-        }
-      }
-    } catch {
-      // Continue checking next candidate
-    }
+  if (!pem.includes("-----BEGIN CERTIFICATE-----") || !pem.includes("-----END CERTIFICATE-----")) {
+    throw AcmeError.serverInternal(
+      `Intermediate CA certificate for '${ca.id}' has invalid PEM format`
+    );
   }
-
-  throw AcmeError.serverInternal(
-    `Failed to read Intermediate CA certificate for '${ca.id}' (${ca.certFile}) in designated directory '${caDir}'. Checked paths: ${candidatePaths.slice(0, 4).join(", ")}`
-  );
+  return pem;
 }
 
-/**
- * Loads the registry of intermediate CAs from the designated directory manifest or fallback scanning.
- */
-export function loadCaRegistry(caDir = CONFIG.CA_DIR, env?: AcmeEnv): IntermediateCaEntry[] {
-  const manifestCandidates: string[] = [
-    path.resolve(caDir, "manifest.json"),
-    path.join(caDir, "manifest.json"),
-    `/bundle/${caDir}/manifest.json`,
-    `/bundle/manifest.json`,
-    path.resolve(process.cwd(), caDir, "manifest.json"),
-    path.resolve(__dirname, "../../cas/manifest.json"),
-    path.resolve(process.cwd(), "registry/ca.json"),
-    path.resolve(__dirname, "../../../registry/ca.json"),
-  ];
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
-  for (const candidate of manifestCandidates) {
-    try {
-      if (fs.existsSync(candidate)) {
-        const parsed = JSON.parse(fs.readFileSync(candidate, "utf-8"));
-        const cas = parsed.cas || {};
-        const entries: IntermediateCaEntry[] = [];
-
-        for (const [key, value] of Object.entries(cas)) {
-          const val = value as Record<string, unknown>;
-          const certFile =
-            (val.certFile as string) ||
-            (val.location ? path.basename(val.location as string) : `${key}.pem`);
-          const pkEnv =
-            (val.pkEnv as string) ||
-            (val.pk_env as string) ||
-            `PK_${key.toUpperCase().replace(/-/g, "_")}`;
-
-          entries.push({
-            id: key,
-            certFile,
-            pkEnv,
-            weight: 1,
-          });
-        }
-
-        if (entries.length > 0) {
-          return entries;
-        }
-      }
-    } catch {
-      // Continue checking next candidate
-    }
-  }
-
-  // Fallback: Attempt directory listing in caDir
+/** Loads only the manifest generated by bundle-cas.mjs; invalid registries fail explicitly. */
+export function loadCaRegistry(caDir = CONFIG.CA_DIR): IntermediateCaEntry[] {
+  let manifest: unknown;
   try {
-    const candidateDirs = [
-      caDir,
-      path.resolve(process.cwd(), caDir),
-      `/bundle/${caDir}`,
-      path.resolve(__dirname, "../../cas"),
-    ];
-
-    for (const dir of candidateDirs) {
-      if (fs.existsSync(dir)) {
-        const files = fs.readdirSync(dir);
-        const pemFiles = files.filter((f) => f.endsWith(".pem"));
-        if (pemFiles.length > 0) {
-          return pemFiles.map((f) => {
-            const id = path.basename(f, ".pem");
-            return {
-              id,
-              certFile: f,
-              pkEnv: `PK_${id.toUpperCase().replace(/-/g, "_")}`,
-              weight: 1,
-            };
-          });
-        }
-      }
-    }
-  } catch {
-    // Ignore and fallback
+    manifest = JSON.parse(readCaFile("manifest.json", caDir));
+  } catch (err) {
+    throw AcmeError.serverInternal(
+      `Failed to load Intermediate CA registry manifest.json: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
 
-  // Default fallback if nothing found on disk
-  return [
-    {
-      id: CONFIG.DEFAULT_CA_ID,
-      certFile: `${CONFIG.DEFAULT_CA_ID}.pem`,
-      pkEnv: CONFIG.DEFAULT_PK_ENV_VAR,
-      weight: 1,
-    },
-  ];
+  if (!isRecord(manifest) || !isRecord(manifest.cas) || Object.keys(manifest.cas).length === 0) {
+    throw AcmeError.serverInternal("Invalid Intermediate CA registry: expected non-empty 'cas' object");
+  }
+
+  return Object.entries(manifest.cas).map(([id, entry]) => {
+    if (
+      !isRecord(entry) ||
+      typeof entry.certFile !== "string" ||
+      typeof entry.pkEnv !== "string" ||
+      !entry.pkEnv.trim()
+    ) {
+      throw AcmeError.serverInternal(`Invalid Intermediate CA registry entry '${id}': expected certFile and pkEnv`);
+    }
+    validateCaFileName(entry.certFile);
+    return { id, certFile: entry.certFile, pkEnv: entry.pkEnv, weight: 1 };
+  });
 }
 
 /**
@@ -343,7 +272,7 @@ export async function selectIntermediateCa(
   }
 ): Promise<SelectedIntermediateCa> {
   const caDir = env.CA_DIR || CONFIG.CA_DIR;
-  const candidates = options?.candidates || loadCaRegistry(caDir, env);
+  const candidates = options?.candidates || loadCaRegistry(caDir);
 
   // Build exclusion set
   const excludedSet = new Set<string>(CONFIG.EXCLUDED_CA_IDS || []);
@@ -391,14 +320,10 @@ export async function selectIntermediateCa(
       continue;
     }
 
-    // 4. Validate intermediate CA certificate validity & constraints
-    let certPem: string;
-    try {
-      certPem = readCaCertPem(ca, caDir, env);
-    } catch {
-      continue;
-    }
+    // 4. Read the certificate; missing files indicate a broken bundle.
+    const certPem = readCaCertPem(ca, caDir, env);
 
+    // 5. Check certificate eligibility
     const val = validateIntermediateCaCertificate(ca, certPem, now, options?.revokedSerials);
     if (!val.eligible) {
       continue;
@@ -437,7 +362,7 @@ export async function selectIntermediateCa(
     }
   }
 
-  // Read certificate PEM from designated directory (or already verified certPem)
+  // Certificate PEM is already verified
   const certPem = chosen.certPem;
 
   // Import private key
