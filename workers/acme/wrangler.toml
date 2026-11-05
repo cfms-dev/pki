@@ -1,0 +1,20 @@
+name = "cfms-pki-acme"
+main = "src/index.ts"
+compatibility_date = "2026-08-04"
+compatibility_flags = ["nodejs_compat"]
+
+[[rules]]
+type = "Text"
+globs = ["**/*.pem"]
+fallthrough = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cfms-acme-db"
+database_id = "local-d1-acme"
+
+[vars]
+CERT_VALIDITY_DAYS = "90"
+RENEWAL_WINDOW_DAYS = "30"
+CA_ID = "generic-intermediate"
+PK_ENV_VAR = "PK_GENERIC_INTERMEDIATE"
