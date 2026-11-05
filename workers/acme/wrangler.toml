@@ -1,4 +1,4 @@
-name = "cfms-pki-acme"
+name = "pki"
 main = "src/index.ts"
 compatibility_date = "2026-08-04"
 compatibility_flags = ["nodejs_compat"]
