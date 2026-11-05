@@ -184,7 +184,7 @@ async function routeRequest(
   // RFC 9773 ACME Renewal Information (ARI)
   const ariMatch = path.match(/^\/renewal-info\/([a-zA-Z0-9_.-]+)$/);
   if (ariMatch) {
-    return await handleRenewalInfo(request, database, ariMatch[1]);
+    return await handleRenewalInfo(request, database, ariMatch[1], env);
   }
 
   throw AcmeError.notFound(`Endpoint '${path}' not found`);

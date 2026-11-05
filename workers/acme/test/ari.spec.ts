@@ -5,6 +5,10 @@ import {
   computeSuggestedWindow,
 } from "../src/ari/window";
 import { CertificateRow } from "../src/db/types";
+import { handleRenewalInfo } from "../src/routes/ari";
+import { Database } from "../src/db/queries";
+import { AcmeEnv, CONFIG } from "../src/config";
+import { createMockD1Database } from "./mock-d1";
 
 describe("RFC 9773 ACME Renewal Information (ARI)", () => {
   it("should correctly encode DER serial contents with positive MSB padding", () => {
@@ -140,5 +144,48 @@ describe("RFC 9773 ACME Renewal Information (ARI)", () => {
     const resReplaced = checkAriRenewalEligibility(certReplaced, ["example.com"], day65);
     expect(resReplaced.eligible).toBe(false);
     expect(resReplaced.reason).toContain("already been replaced");
+  });
+
+  it("should configure ARI explanationURL from CONFIG or env", async () => {
+    const d1 = createMockD1Database();
+    const db = new Database(d1);
+    await db.initSchema();
+
+    const notBeforeSec = Math.floor(Date.now() / 1000);
+    const notAfterSec = notBeforeSec + 90 * 86400;
+    const cert: CertificateRow = {
+      id: "cert-test-ari-url",
+      cert_id: "aki-ari-test.serial-ari-test",
+      serial_number: "998877",
+      aki: "112233",
+      subject: "CN=example.com",
+      san: JSON.stringify(["example.com"]),
+      pem: "...",
+      not_before: notBeforeSec,
+      not_after: notAfterSec,
+      account_id: "acc-1",
+      created_at: notBeforeSec,
+      revoked_at: null,
+      revocation_reason: null,
+      replaced_by_cert_id: null,
+    };
+    await db.saveCertificate(cert);
+
+    // 1. Default CONFIG explanationURL
+    const req = new Request(`https://acme.test/renewal-info/${cert.cert_id}`);
+    const respDefault = await handleRenewalInfo(req, db, cert.cert_id);
+    expect(respDefault.status).toBe(200);
+    const bodyDefault = (await respDefault.json()) as { explanationURL: string };
+    expect(bodyDefault.explanationURL).toBe(CONFIG.ARI_EXPLANATION_URL);
+
+    // 2. Custom override via env.ARI_EXPLANATION_URL
+    const customEnv: AcmeEnv = {
+      DB: d1,
+      ARI_EXPLANATION_URL: "https://custom.example.org/ari-explanation",
+    };
+    const respCustom = await handleRenewalInfo(req, db, cert.cert_id, customEnv);
+    expect(respCustom.status).toBe(200);
+    const bodyCustom = (await respCustom.json()) as { explanationURL: string };
+    expect(bodyCustom.explanationURL).toBe("https://custom.example.org/ari-explanation");
   });
 });

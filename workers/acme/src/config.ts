@@ -10,15 +10,28 @@ export interface AcmeEnv {
   PK_ENV_VAR?: string;
   EXCLUDED_CA_IDS?: string; // Comma-separated list of CA identifiers to exclude
   CA_WEIGHTS?: string;      // JSON string of { [caId]: number }
+  WEBSITE_URL?: string;
+  ARI_EXPLANATION_URL?: string;
+  TERMS_OF_SERVICE_URL?: string;
   [key: string]: unknown;
 }
 
 // Authoritative Global CAA Issuer Domain Name (RFC 8659)
 export const CAA_ISSUER_DOMAIN_NAME = "cfms-pki.crpteam.club";
 
+// Public URLs & Metadata (RFC 8555 & RFC 9773)
+export const WEBSITE_URL = `https://${CAA_ISSUER_DOMAIN_NAME}`;
+export const ARI_EXPLANATION_URL = `https://${CAA_ISSUER_DOMAIN_NAME}/docs/ari`;
+export const TERMS_OF_SERVICE_URL = "";
+
 export const CONFIG = {
   // Authoritative Global CAA Issuer Domain Name
   CAA_ISSUER_DOMAIN_NAME,
+
+  // Public URLs & Metadata
+  WEBSITE_URL,
+  ARI_EXPLANATION_URL,
+  TERMS_OF_SERVICE_URL,
 
   // RFC 8555 defaults
   DEFAULT_CERT_VALIDITY_DAYS: 90,

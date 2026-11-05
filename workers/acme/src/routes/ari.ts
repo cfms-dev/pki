@@ -1,4 +1,4 @@
-import { CONFIG } from "../config";
+import { AcmeEnv, CONFIG } from "../config";
 import { Database } from "../db/queries";
 import { AcmeError } from "../errors";
 import { computeSuggestedWindow } from "../ari/window";
@@ -6,7 +6,8 @@ import { computeSuggestedWindow } from "../ari/window";
 export async function handleRenewalInfo(
   request: Request,
   database: Database,
-  certId: string
+  certId: string,
+  env?: AcmeEnv
 ): Promise<Response> {
   if (request.method !== "GET") {
     return new Response("Method Not Allowed", { status: 405 });
@@ -22,10 +23,16 @@ export async function handleRenewalInfo(
     CONFIG.DEFAULT_RENEWAL_WINDOW_DAYS
   );
 
-  const body = {
+  const explanationURL =
+    (env?.ARI_EXPLANATION_URL as string) || CONFIG.ARI_EXPLANATION_URL;
+
+  const body: { suggestedWindow: typeof suggestedWindow; explanationURL?: string } = {
     suggestedWindow,
-    explanationURL: "https://cfms-pki.example.com/docs/ari",
   };
+
+  if (explanationURL) {
+    body.explanationURL = explanationURL;
+  }
 
   return new Response(JSON.stringify(body, null, 2), {
     status: 200,

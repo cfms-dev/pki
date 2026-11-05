@@ -44,6 +44,27 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
       expect(data.meta).toBeDefined();
       expect(data.meta.caaIdentities).toEqual(["cfms-pki.crpteam.club"]);
       expect(data.meta.caaIdentities[0]).toBe(CAA_ISSUER_DOMAIN_NAME);
+      expect(data.meta.website).toBe(CONFIG.WEBSITE_URL);
+    });
+
+    it("should allow overriding website and termsOfService via env", async () => {
+      const customEnv: AcmeEnv = {
+        DB: createMockD1Database(),
+        WEBSITE_URL: "https://custom.example.org",
+        TERMS_OF_SERVICE_URL: "https://custom.example.org/tos",
+      };
+      const resp = handleDirectory(
+        new Request("https://acme.test/directory"),
+        customEnv,
+        "https://acme.test"
+      );
+      expect(resp.status).toBe(200);
+
+      const data = (await resp.json()) as {
+        meta: { website: string; termsOfService: string };
+      };
+      expect(data.meta.website).toBe("https://custom.example.org");
+      expect(data.meta.termsOfService).toBe("https://custom.example.org/tos");
     });
   });
 

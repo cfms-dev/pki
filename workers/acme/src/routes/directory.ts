@@ -1,6 +1,12 @@
-import { AcmeEnv, CAA_ISSUER_DOMAIN_NAME } from "../config";
+import { AcmeEnv, CAA_ISSUER_DOMAIN_NAME, CONFIG } from "../config";
 
 export function handleDirectory(request: Request, env: AcmeEnv, baseUrl: string): Response {
+  const website = (env.WEBSITE_URL as string) || CONFIG.WEBSITE_URL;
+  const termsOfService =
+    (env.TERMS_OF_SERVICE_URL as string) ||
+    CONFIG.TERMS_OF_SERVICE_URL ||
+    `${baseUrl}/terms`;
+
   const directory = {
     newNonce: `${baseUrl}/new-nonce`,
     newAccount: `${baseUrl}/new-account`,
@@ -9,8 +15,8 @@ export function handleDirectory(request: Request, env: AcmeEnv, baseUrl: string)
     keyChange: `${baseUrl}/key-change`,
     renewalInfo: `${baseUrl}/renewal-info`, // RFC 9773 ACME Renewal Information
     meta: {
-      termsOfService: `${baseUrl}/terms`,
-      website: "https://cfms-pki.example.com",
+      termsOfService,
+      website,
       caaIdentities: [CAA_ISSUER_DOMAIN_NAME],
       externalAccountRequired: false,
     },
