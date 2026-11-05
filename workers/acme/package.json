@@ -9,12 +9,13 @@
   },
   "scripts": {
     "build:cas": "node scripts/bundle-cas.mjs",
-    "pretest": "npm run build:cas",
-    "types": "wrangler types",
+    "generate:types": "wrangler types",
+    "pretypecheck": "npm run generate:types",
     "typecheck": "tsc --noEmit",
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "test": "vitest run"
+    "pretest": "npm run build:cas",
+    "test": "vitest run",
+    "dev": "wrangler dev --types",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "@peculiar/x509": "^3.1.0",

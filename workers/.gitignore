@@ -47,6 +47,7 @@ web_modules/
 
 # TypeScript cache
 *.tsbuildinfo
+worker-configuration.d.ts
 
 # Bundled intermediate CA artifacts generated at deployment/build time
 acme/cas/*

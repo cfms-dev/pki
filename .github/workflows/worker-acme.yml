@@ -1,0 +1,55 @@
+name: ACME Worker CI
+
+'on':
+  push:
+    branches:
+      - main
+    paths:
+      - 'workers/acme/**'
+      - 'workers/.gitignore'
+      - 'registry/**'
+      - 'certs/**'
+      - '.github/workflows/worker-acme.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'workers/acme/**'
+      - 'workers/.gitignore'
+      - 'registry/**'
+      - 'certs/**'
+      - '.github/workflows/worker-acme.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/acme
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          # node-version: 22
+          cache: 'npm'
+          cache-dependency-path: workers/acme/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Worker types
+        run: npm run generate:types
+
+      - name: Run Typecheck
+        run: npm run typecheck
+
+      - name: Run Vitest tests
+        run: npm test
