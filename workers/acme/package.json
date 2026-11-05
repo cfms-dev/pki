@@ -5,6 +5,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:cas": "node scripts/bundle-cas.mjs",
+    "predev": "npm run build:cas",
+    "predeploy": "npm run build:cas",
+    "pretest": "npm run build:cas",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "vitest run"

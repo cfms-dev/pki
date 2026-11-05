@@ -5,8 +5,11 @@ export interface AcmeEnv {
   ACME_BASE_URL?: string;
   CERT_VALIDITY_DAYS?: string;
   RENEWAL_WINDOW_DAYS?: string;
+  CA_DIR?: string;
   CA_ID?: string;
   PK_ENV_VAR?: string;
+  EXCLUDED_CA_IDS?: string; // Comma-separated list of CA identifiers to exclude
+  CA_WEIGHTS?: string;      // JSON string of { [caId]: number }
   [key: string]: unknown;
 }
 
@@ -32,24 +35,17 @@ export const CONFIG = {
   RATE_LIMIT_FAILED_VALIDATIONS: 5,      // 5 failures per account per hostname per hour
   RATE_LIMIT_FAILED_WINDOW_SECONDS: 3600,
 
-  // Default Intermediate CA identifier matching registry/ca.json
+  // Intermediate CA Directory & Selection Configuration
+  CA_DIR: "cas",                         // Designated directory for bundled intermediate CA certs
+
+  // Excluded CA identifiers from issuance (configured in config.ts)
+  EXCLUDED_CA_IDS: [] as string[],       // e.g. ["legacy-ca"]
+
+  // Relative weights for CA selection (default weight is 1 if unspecified)
+  // Higher weight increases probability: P(CA_i) = weight_i / sum(weights)
+  CA_WEIGHTS: {} as Record<string, number>, // e.g. { "generic-intermediate": 10, "backup-intermediate": 1 }
+
+  // Default Intermediate CA fallback identifier
   DEFAULT_CA_ID: "generic-intermediate",
   DEFAULT_PK_ENV_VAR: "PK_GENERIC_INTERMEDIATE",
-
-  // Bundled Generic Intermediate CA Certificate (from certs/generic-intermediate.pem)
-  BUNDLED_INTERMEDIATE_CERT_PEM: `-----BEGIN CERTIFICATE-----
-MIICazCCAhCgAwIBAgIUMOJM76aCZ/5MXqL3fxaQbPvYJoMwCgYIKoZIzj0EAwIw
-ejELMAkGA1UEBhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0JlaWpp
-bmcxJTAjBgNVBAoMHENGTVMgTWFuYWdlbWVudCBPcmdhbml6YXRpb24xIDAeBgNV
-BAMMF0NGTVMgVmFsaWRhdGlvbiBSb290IENBMB4XDTI1MDkxOTA0MzQyMFoXDTI4
-MDkxODA0MzQyMFowgYcxCzAJBgNVBAYTAkNOMRAwDgYDVQQIDAdCZWlqaW5nMRAw
-DgYDVQQHDAdCZWlqaW5nMTUwMwYDVQQKDCxDRk1TIEludGVybWVkaWF0ZSBDQSBN
-YW5hZ2VtZW50IE9yZ2FuaXphdGlvbjEdMBsGA1UEAwwUQ0ZNUyBJbnRlcm1lZGlh
-dGUgQ0EwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARUHTvzub/uwfCcFHZdnliF
-IGghm1ZNxdKjYjeYMZs87uu8AjJVtG9MBV0+bnj9uzzYDoQ2+5u2gccB4ETiT6mB
-o2YwZDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBhjAdBgNVHQ4E
-FgQU5YWPQ5jiWFP+M3bAJrk/iGzigeMwHwYDVR0jBBgwFoAUYgHVcHEiM4gP4gSA
-oIMUKCQGBv4wCgYIKoZIzj0EAwIDSQAwRgIhALrCHuX8oDwF5GJyekkH3DNdAmVq
-d2diSMQPL3P1eKxNAiEA9hIiXGee0/VWU6rchoDpu2Zgfm+O9Qea9w24byIHk4A=
------END CERTIFICATE-----`.trim(),
 };

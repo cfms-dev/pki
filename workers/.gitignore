@@ -47,6 +47,10 @@ web_modules/
 # TypeScript cache
 *.tsbuildinfo
 
+# Bundled intermediate CA artifacts generated at deployment/build time
+acme/cas/*
+!acme/cas/.gitkeep
+
 # Optional npm cache directory
 .npm
 

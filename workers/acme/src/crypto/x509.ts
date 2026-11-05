@@ -2,7 +2,15 @@ import * as x509 from "@peculiar/x509";
 import { AcmeEnv, CONFIG } from "../config";
 import { AcmeError } from "../errors";
 import { base64UrlDecode } from "./nonce";
-import { bytesToHex, computeCertId, hexToBytes } from "../ari/cert-id";
+import { bytesToHex, computeCertId } from "../ari/cert-id";
+import {
+  importCaPrivateKey,
+  pemToDer,
+  SelectedIntermediateCa,
+  selectIntermediateCa,
+} from "./ca";
+
+export { pemToDer, importCaPrivateKey };
 
 export interface ParsedCsr {
   csr: x509.Pkcs10CertificateRequest;
@@ -20,6 +28,7 @@ export interface IssuedCertificate {
   notAfter: number;     // unix seconds
   subject: string;
   san: string[];
+  caId: string;
 }
 
 /**
@@ -80,65 +89,19 @@ export async function parseAndVerifyCsr(csrBase64Url: string): Promise<ParsedCsr
 }
 
 /**
- * Converts a PEM string (PKCS#8 / Certificate) to raw DER bytes
- */
-export function pemToDer(pem: string): Uint8Array {
-  const b64 = pem
-    .replace(/-----[^-]+-----/g, "")
-    .replace(/\s+/g, "");
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-/**
  * Loads the CA private key from the environment
  */
-export async function loadCaPrivateKey(env: AcmeEnv): Promise<CryptoKey> {
-  const pkVarName = env.PK_ENV_VAR || CONFIG.DEFAULT_PK_ENV_VAR;
-  const pkPem = env[pkVarName] as string | undefined;
+export async function loadCaPrivateKey(env: AcmeEnv, pkVarName?: string): Promise<CryptoKey> {
+  const varName = pkVarName || env.PK_ENV_VAR || CONFIG.DEFAULT_PK_ENV_VAR;
+  const pkPem = env[varName] as string | undefined;
 
   if (!pkPem || typeof pkPem !== "string" || pkPem.trim() === "") {
     throw AcmeError.serverInternal(
-      `CA private key missing: environment variable ${pkVarName} is not set or empty`
+      `CA private key missing: environment variable ${varName} is not set or empty`
     );
   }
 
-  const der = pemToDer(pkPem);
-
-  // Try importing as ECDSA P-256 first (matching generic-intermediate.pem)
-  try {
-    return await crypto.subtle.importKey(
-      "pkcs8",
-      der.buffer,
-      { name: "ECDSA", namedCurve: "P-256" },
-      false,
-      ["sign"]
-    );
-  } catch {
-    // Try RSA
-    try {
-      return await crypto.subtle.importKey(
-        "pkcs8",
-        der.buffer,
-        { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-        false,
-        ["sign"]
-      );
-    } catch {
-      // Try Ed25519
-      try {
-        return await crypto.subtle.importKey("pkcs8", der.buffer, { name: "Ed25519" }, false, ["sign"]);
-      } catch (err: unknown) {
-        throw AcmeError.serverInternal(
-          `Failed to import CA private key: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
-    }
-  }
+  return importCaPrivateKey(pkPem);
 }
 
 /**
@@ -159,11 +122,13 @@ export async function issueCertificateFromCsr(
   csr: x509.Pkcs10CertificateRequest,
   authorizedDomains: string[],
   env: AcmeEnv,
-  validityDays = CONFIG.DEFAULT_CERT_VALIDITY_DAYS
+  validityDays = CONFIG.DEFAULT_CERT_VALIDITY_DAYS,
+  explicitCa?: SelectedIntermediateCa
 ): Promise<IssuedCertificate> {
-  const caCertPem = (env.CA_CERT_PEM as string) || CONFIG.BUNDLED_INTERMEDIATE_CERT_PEM;
+  const selected = explicitCa || (await selectIntermediateCa(env));
+  const caCertPem = selected.certPem;
   const caCert = new x509.X509Certificate(caCertPem);
-  const caPrivateKey = await loadCaPrivateKey(env);
+  const caPrivateKey = selected.privateKey;
 
   const now = new Date();
   const notBefore = now;
@@ -228,5 +193,6 @@ export async function issueCertificateFromCsr(
     notAfter: Math.floor(notAfter.getTime() / 1000),
     subject: `CN=${authorizedDomains[0]}`,
     san: authorizedDomains,
+    caId: selected.ca.id,
   };
 }
