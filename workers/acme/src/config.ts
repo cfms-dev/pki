@@ -13,7 +13,13 @@ export interface AcmeEnv {
   [key: string]: unknown;
 }
 
+// Authoritative Global CAA Issuer Domain Name (RFC 8659)
+export const CAA_ISSUER_DOMAIN_NAME = "cfms-pki.crpteam.club";
+
 export const CONFIG = {
+  // Authoritative Global CAA Issuer Domain Name
+  CAA_ISSUER_DOMAIN_NAME,
+
   // RFC 8555 defaults
   DEFAULT_CERT_VALIDITY_DAYS: 90,
   DEFAULT_RENEWAL_WINDOW_DAYS: 30, // ARI suggested window duration (start = notAfter - 30d, end = notAfter)

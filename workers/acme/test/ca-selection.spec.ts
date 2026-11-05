@@ -229,4 +229,39 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
     });
     expect(valid).toBe(true);
   });
+
+  it("should automatically skip expired intermediate CAs during selection", async () => {
+    const expiredKeys = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"]
+    );
+    const expiredCert = await x509.X509CertificateGenerator.create({
+      serialNumber: "0102030405060708090c",
+      subject: "CN=Expired Intermediate CA, O=CFMS",
+      issuer: "CN=CFMS Root CA",
+      notBefore: new Date(Date.now() - 365 * 86400 * 1000),
+      notAfter: new Date(Date.now() - 86400 * 1000), // Expired!
+      publicKey: expiredKeys.publicKey,
+      signingKey: expiredKeys.privateKey,
+      signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+      extensions: [
+        new x509.BasicConstraintsExtension(true, true),
+        new x509.KeyUsagesExtension(x509.KeyUsageFlags.keyCertSign),
+      ],
+    });
+    const expiredPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(await crypto.subtle.exportKey("pkcs8", expiredKeys.privateKey)).toString("base64")}\n-----END PRIVATE KEY-----`;
+
+    const env: AcmeEnv = {
+      DB: createMockD1Database(),
+      CA_DIR: "cas",
+      CA_CERT_PEM: expiredCert.toString("pem"),
+      PK_GENERIC_INTERMEDIATE: expiredPkPem,
+    };
+
+    // Since generic-intermediate's cert is expired, it should be excluded from selection
+    await expect(selectIntermediateCa(env)).rejects.toThrowError(
+      /No eligible Intermediate CA available for certificate issuance/
+    );
+  });
 });

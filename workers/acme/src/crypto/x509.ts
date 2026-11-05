@@ -29,6 +29,7 @@ export interface IssuedCertificate {
   subject: string;
   san: string[];
   caId: string;
+  caSerialNumber: string;
 }
 
 /**
@@ -194,5 +195,6 @@ export async function issueCertificateFromCsr(
     subject: `CN=${authorizedDomains[0]}`,
     san: authorizedDomains,
     caId: selected.ca.id,
+    caSerialNumber: caCert.serialNumber,
   };
 }

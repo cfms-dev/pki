@@ -1,4 +1,4 @@
-import { AcmeEnv } from "../config";
+import { AcmeEnv, CAA_ISSUER_DOMAIN_NAME } from "../config";
 
 export function handleDirectory(request: Request, env: AcmeEnv, baseUrl: string): Response {
   const directory = {
@@ -11,7 +11,7 @@ export function handleDirectory(request: Request, env: AcmeEnv, baseUrl: string)
     meta: {
       termsOfService: `${baseUrl}/terms`,
       website: "https://cfms-pki.example.com",
-      caaIdentities: ["cfms-pki.example.com"],
+      caaIdentities: [CAA_ISSUER_DOMAIN_NAME],
       externalAccountRequired: false,
     },
   };

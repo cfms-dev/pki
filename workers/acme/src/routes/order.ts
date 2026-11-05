@@ -2,6 +2,8 @@ import { AcmeEnv, CONFIG } from "../config";
 import { generateNonceString } from "../crypto/nonce";
 import { verifyAcmeJws } from "../crypto/jws";
 import { issueCertificateFromCsr, parseAndVerifyCsr } from "../crypto/x509";
+import { selectIntermediateCa } from "../crypto/ca";
+import { validateCaaForOrder } from "../dns/caa";
 import { Database } from "../db/queries";
 import { AuthorizationRow, OrderRow } from "../db/types";
 import { AcmeError } from "../errors";
@@ -208,8 +210,23 @@ export async function handleFinalizeOrder(
     );
   }
 
-  // Issue Certificate
-  const issued = await issueCertificateFromCsr(parsedCsr.csr, orderDomains, env);
+  // Pre-issuance CAA Verification (RFC 8659)
+  // All intermediate CAs share the unified CAA Identity: CAA_ISSUER_DOMAIN_NAME ("cfms-pki.crpteam.club")
+  const accountUri = `${baseUrl}/account/${verified.account.id}`;
+  await validateCaaForOrder(orderDomains, accountUri, env);
+
+  // After CAA validation and other pre-issuance checks pass,
+  // select an Intermediate CA from the eligible pool
+  const selectedCa = await selectIntermediateCa(env);
+
+  // Issue Certificate with selected intermediate CA
+  const issued = await issueCertificateFromCsr(
+    parsedCsr.csr,
+    orderDomains,
+    env,
+    undefined,
+    selectedCa
+  );
 
   const certIdInDb = crypto.randomUUID();
   await database.saveCertificate({

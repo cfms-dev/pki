@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import * as x509 from "@peculiar/x509";
 import { AcmeEnv, CONFIG } from "../config";
 import { AcmeError } from "../errors";
 
@@ -222,6 +223,111 @@ export function loadCaRegistry(caDir = CONFIG.CA_DIR, env?: AcmeEnv): Intermedia
 }
 
 /**
+ * Validates intermediate CA certificate validity, basic constraints, and key usage.
+ * Rejects expired, not-yet-valid, non-CA, or non-certificate-signing CAs.
+ */
+export function validateIntermediateCaCertificate(
+  ca: IntermediateCaEntry,
+  certPem: string,
+  now = new Date(),
+  revokedSerials?: Set<string>
+): { eligible: boolean; reason?: string } {
+  try {
+    const cert = new x509.X509Certificate(certPem);
+
+    // 1. Check validity period (not expired, already active)
+    if (cert.notBefore > now) {
+      return {
+        eligible: false,
+        reason: `CA '${ca.id}' certificate is not yet valid (notBefore: ${cert.notBefore.toISOString()})`,
+      };
+    }
+    if (cert.notAfter <= now) {
+      return {
+        eligible: false,
+        reason: `CA '${ca.id}' certificate has expired (notAfter: ${cert.notAfter.toISOString()})`,
+      };
+    }
+
+    // 2. Check Basic Constraints: must have CA=true
+    let isCa = false;
+    for (const ext of cert.extensions) {
+      if (ext instanceof x509.BasicConstraintsExtension) {
+        isCa = ext.ca;
+        break;
+      }
+      if (ext.type === "2.5.29.19") {
+        try {
+          const bc = new x509.BasicConstraintsExtension(ext.rawData);
+          isCa = bc.ca;
+          break;
+        } catch {
+          // continue
+        }
+      }
+    }
+    if (!isCa) {
+      return {
+        eligible: false,
+        reason: `CA '${ca.id}' certificate lacks basicConstraints CA=true`,
+      };
+    }
+
+    // 3. Check Key Usage: if present, must include keyCertSign (bit 32)
+    for (const ext of cert.extensions) {
+      if (ext instanceof x509.KeyUsagesExtension) {
+        if ((ext.usages & x509.KeyUsageFlags.keyCertSign) === 0) {
+          return {
+            eligible: false,
+            reason: `CA '${ca.id}' certificate keyUsage forbids certificate signing`,
+          };
+        }
+      }
+      if (ext.type === "2.5.29.15") {
+        try {
+          const ku = new x509.KeyUsagesExtension(ext.rawData);
+          if ((ku.usages & x509.KeyUsageFlags.keyCertSign) === 0) {
+            return {
+              eligible: false,
+              reason: `CA '${ca.id}' certificate keyUsage forbids certificate signing`,
+            };
+          }
+        } catch {
+          // continue
+        }
+      }
+    }
+
+    // 4. Revocation check
+    if (revokedSerials) {
+      const serialNorm = cert.serialNumber.toLowerCase().replace(/^0x/, "");
+      if (revokedSerials.has(serialNorm) || revokedSerials.has(ca.id.toLowerCase())) {
+        return {
+          eligible: false,
+          reason: `CA '${ca.id}' certificate is revoked`,
+        };
+      }
+    }
+
+    return { eligible: true };
+  } catch (err) {
+    return {
+      eligible: false,
+      reason: `Failed to parse CA '${ca.id}' certificate: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * Generates a cryptographically secure uniform random float in [0, 1)
+ */
+export function secureRandom(): number {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return buf[0] / (0xffffffff + 1);
+}
+
+/**
  * Selects an Intermediate CA using weighted random selection,
  * taking into account exclusion lists in config.ts / env and ensuring
  * the required private key is configured in the environment.
@@ -231,6 +337,8 @@ export async function selectIntermediateCa(
   options?: {
     candidates?: IntermediateCaEntry[];
     random?: () => number;
+    now?: Date;
+    revokedSerials?: Set<string>;
   }
 ): Promise<SelectedIntermediateCa> {
   const caDir = env.CA_DIR || CONFIG.CA_DIR;
@@ -260,7 +368,8 @@ export async function selectIntermediateCa(
   }
 
   // Filter eligible CAs
-  const eligible: IntermediateCaEntry[] = [];
+  const eligible: Array<IntermediateCaEntry & { certPem: string }> = [];
+  const now = options?.now || new Date();
 
   for (const ca of candidates) {
     // 1. Check exclusion
@@ -281,9 +390,23 @@ export async function selectIntermediateCa(
       continue;
     }
 
+    // 4. Validate intermediate CA certificate validity & constraints
+    let certPem: string;
+    try {
+      certPem = readCaCertPem(ca, caDir, env);
+    } catch {
+      continue;
+    }
+
+    const val = validateIntermediateCaCertificate(ca, certPem, now, options?.revokedSerials);
+    if (!val.eligible) {
+      continue;
+    }
+
     eligible.push({
       ...ca,
       weight,
+      certPem,
     });
   }
 
@@ -293,13 +416,13 @@ export async function selectIntermediateCa(
     );
   }
 
-  // Weighted Random Selection
-  let chosen: IntermediateCaEntry;
+  // Weighted Random Selection using secure random generator
+  let chosen: (IntermediateCaEntry & { certPem: string });
   if (eligible.length === 1) {
     chosen = eligible[0];
   } else {
     const totalWeight = eligible.reduce((acc, c) => acc + c.weight, 0);
-    const rng = options?.random ? options.random() : Math.random();
+    const rng = options?.random ? options.random() : secureRandom();
     const target = rng * totalWeight;
 
     let cumulative = 0;
@@ -313,8 +436,8 @@ export async function selectIntermediateCa(
     }
   }
 
-  // Read certificate PEM from designated directory
-  const certPem = readCaCertPem(chosen, caDir, env);
+  // Read certificate PEM from designated directory (or already verified certPem)
+  const certPem = chosen.certPem;
 
   // Import private key
   const pkPem = env[chosen.pkEnv] as string;

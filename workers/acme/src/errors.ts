@@ -70,6 +70,10 @@ export class AcmeError extends Error {
     return new AcmeError("rejectedIdentifier", detail, 400);
   }
 
+  static caa(detail = "Certification Authority Authorization (CAA) records forbid the CA from issuing"): AcmeError {
+    return new AcmeError("caa", detail, 403);
+  }
+
   static alreadyRevoked(detail = "Certificate is already revoked"): AcmeError {
     return new AcmeError("alreadyRevoked", detail, 400);
   }
