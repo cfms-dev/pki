@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import * as x509 from "@peculiar/x509";
 import {
+  derivePublicKeyIdentity,
   issueCertificateFromCsr,
   parseAndVerifyCsr,
 } from "../src/crypto/x509";
@@ -132,6 +133,47 @@ describe("X.509 Certificate Issuance & CSR Handling", () => {
     });
     const parsedSan = await parseAndVerifyCsr(base64UrlEncode(descriptiveCn.rawData));
     expect(parsedSan.domains).toEqual(["example.com"]);
+  });
+
+  it("normalizes a supported non-account key algorithm (ECDSA P-384)", async () => {
+    const keys = (await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-384" },
+      true,
+      ["sign", "verify"]
+    )) as CryptoKeyPair;
+    const csr = await x509.Pkcs10CertificateRequestGenerator.create({
+      name: "CN=example.com",
+      keys,
+      signingAlgorithm: { name: "ECDSA", hash: "SHA-384" },
+      extensions: [
+        new x509.SubjectAlternativeNameExtension([
+          { type: "dns", value: "example.com" },
+        ]),
+      ],
+    });
+
+    const parsed = await parseAndVerifyCsr(base64UrlEncode(csr.rawData));
+    expect(parsed.publicKeySpki.length).toBeGreaterThan(0);
+    expect(parsed.publicKeyThumbprint).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  });
+
+  it("rejects a CSR whose public key cannot be normalized for key reuse checks", async () => {
+    // X25519 is an SPKI algorithm the ACME server cannot use to verify a CSR
+    // signature or to compare with an account key. Normalization must fail
+    // closed instead of treating the key as "different" by default.
+    const x25519 = (await crypto.subtle.generateKey({ name: "X25519" }, true, [
+      "deriveBits",
+    ])) as CryptoKeyPair;
+    const spki = (await crypto.subtle.exportKey(
+      "spki",
+      x25519.publicKey
+    )) as ArrayBuffer;
+
+    await expect(
+      derivePublicKeyIdentity(new x509.PublicKey(new Uint8Array(spki)))
+    ).rejects.toMatchObject({
+      type: "urn:ietf:params:acme:error:badCSR",
+    });
   });
 
   it("should issue a 90-day leaf certificate signed by intermediate CA", async () => {

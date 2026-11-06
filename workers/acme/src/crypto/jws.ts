@@ -68,16 +68,23 @@ export async function calculateJwkThumbprint(jwk: JsonWebKey): Promise<string> {
 }
 
 /**
- * Imports a public JWK into a CryptoKey for verification
+ * Imports a public JWK into a CryptoKey for verification.
+ *
+ * `extractable` is only set when the caller needs to re-export the key in a
+ * canonical form (for example to compare it with a CSR public key).
  */
-export async function importPublicJwk(jwk: JsonWebKey, alg: string): Promise<CryptoKey> {
+export async function importPublicJwk(
+  jwk: JsonWebKey,
+  alg: string,
+  extractable = false
+): Promise<CryptoKey> {
   try {
     if (alg === "ES256" && jwk.kty === "EC" && jwk.crv === "P-256") {
       return await crypto.subtle.importKey(
         "jwk",
         jwk,
         { name: "ECDSA", namedCurve: "P-256" },
-        false,
+        extractable,
         ["verify"]
       );
     }
@@ -86,12 +93,12 @@ export async function importPublicJwk(jwk: JsonWebKey, alg: string): Promise<Cry
         "jwk",
         jwk,
         { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-        false,
+        extractable,
         ["verify"]
       );
     }
     if (alg === "EdDSA" && jwk.kty === "OKP" && jwk.crv === "Ed25519") {
-      return await crypto.subtle.importKey("jwk", jwk, { name: "Ed25519" }, false, [
+      return await crypto.subtle.importKey("jwk", jwk, { name: "Ed25519" }, extractable, [
         "verify",
       ]);
     }
@@ -101,6 +108,24 @@ export async function importPublicJwk(jwk: JsonWebKey, alg: string): Promise<Cry
       `Failed to import public key: ${err instanceof Error ? err.message : String(err)}`
     );
   }
+}
+
+/**
+ * Exports a public JWK as its canonical SubjectPublicKeyInfo (SPKI) DER
+ * encoding.
+ *
+ * SPKI DER is an algorithm-independent representation of the key material:
+ * two encodings of the same key (different JWK field order, a differently
+ * padded RSA modulus, ...) produce the same DER. Import/export failures are
+ * thrown so callers can fail the request instead of assuming "not equal".
+ */
+export async function exportPublicJwkSpki(
+  jwk: JsonWebKey,
+  alg: string
+): Promise<Uint8Array> {
+  const key = await importPublicJwk(jwk, alg, true);
+  const spki = (await crypto.subtle.exportKey("spki", key)) as ArrayBuffer;
+  return new Uint8Array(spki);
 }
 
 /**

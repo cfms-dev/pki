@@ -4,6 +4,7 @@ import { AcmeEnv, CONFIG } from "../config";
 import { AcmeError } from "../errors";
 import { isValidDnsIdentifier } from "../acme/identifiers";
 import { base64UrlDecode } from "./nonce";
+import { calculateJwkThumbprint } from "./jws";
 import { bytesToHex, computeCertId } from "../ari/cert-id";
 import {
   importCaPrivateKey,
@@ -17,6 +18,10 @@ export interface ParsedCsr {
   csr: x509.Pkcs10CertificateRequest;
   domains: string[];
   publicKey: CryptoKey;
+  /** Canonical SubjectPublicKeyInfo DER encoding of the CSR public key. */
+  publicKeySpki: Uint8Array;
+  /** RFC 7638 SHA-256 JWK thumbprint of the CSR public key. */
+  publicKeyThumbprint: string;
 }
 
 export interface IssuedCertificate {
@@ -31,6 +36,44 @@ export interface IssuedCertificate {
   san: string[];
   caId: string;
   caSerialNumber: string;
+}
+
+export interface PublicKeyIdentity {
+  publicKey: CryptoKey;
+  /** Canonical SubjectPublicKeyInfo DER encoding of the public key. */
+  publicKeySpki: Uint8Array;
+  /** RFC 7638 SHA-256 JWK thumbprint of the public key. */
+  publicKeyThumbprint: string;
+}
+
+/**
+ * Normalises a SubjectPublicKeyInfo public key into a canonical identity.
+ *
+ * `PublicKey.export()` imports the key through WebCrypto, so re-exporting it
+ * produces a canonical SPKI DER (independent of how the client encoded the
+ * key) and the JWK that RFC 7638 thumbprints are defined over. A key that
+ * cannot be normalised is rejected as badCSR: the finalize-time key-reuse
+ * check must never treat an unrepresentable key as a pass.
+ */
+export async function derivePublicKeyIdentity(
+  publicKey: x509.PublicKey
+): Promise<PublicKeyIdentity> {
+  try {
+    const cryptoKey = await publicKey.export();
+    const spki = (await crypto.subtle.exportKey("spki", cryptoKey)) as ArrayBuffer;
+    const jwk = (await crypto.subtle.exportKey("jwk", cryptoKey)) as JsonWebKey;
+    return {
+      publicKey: cryptoKey,
+      publicKeySpki: new Uint8Array(spki),
+      publicKeyThumbprint: await calculateJwkThumbprint(jwk),
+    };
+  } catch (error: unknown) {
+    throw AcmeError.badCSR(
+      `CSR public key is malformed or uses an unsupported algorithm: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
 }
 
 /**
@@ -99,7 +142,7 @@ export async function parseAndVerifyCsr(csrBase64Url: string): Promise<ParsedCsr
   return {
     csr,
     domains: uniqueDomains,
-    publicKey: await csr.publicKey.export(),
+    ...(await derivePublicKeyIdentity(csr.publicKey)),
   };
 }
 

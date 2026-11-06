@@ -154,6 +154,422 @@ describe("HTTP-01 helper functions", () => {
   });
 });
 
+describe("HTTP-01 fail-closed DoH resolution", () => {
+  interface DohRecord {
+    type: number;
+    data: string;
+  }
+
+  function dohJson(status: number, answers?: DohRecord[]): Response {
+    const body: Record<string, unknown> = { Status: status };
+    if (answers !== undefined) body.Answer = answers;
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/dns-json" },
+    });
+  }
+
+  function dohRecordType(url: string): string | null {
+    return new URL(url).searchParams.get("type");
+  }
+
+  function dohName(url: string): string {
+    return new URL(url).searchParams.get("name") ?? "";
+  }
+
+  function isGoogleDoh(url: string): boolean {
+    return url.startsWith("https://dns.google/resolve");
+  }
+
+  function addressAnswer(recordType: string | null, data: string): Response {
+    return recordType === "A"
+      ? dohJson(0, [{ type: 1, data }])
+      : dohJson(0, [{ type: 28, data }]);
+  }
+
+  async function runValidation(
+    options: { requestTimeoutMs?: number; totalTimeoutMs?: number } = {}
+  ) {
+    return validateHttp01Challenge("example.com", TOKEN, THUMBPRINT, {
+      fetchImpl: globalThis.fetch,
+      ...options,
+    });
+  }
+
+  it("accepts a public A record when AAAA is confirmed NODATA", async () => {
+    const queries: string[] = [];
+    let challengeRequests = 0;
+
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        queries.push(url);
+        return dohRecordType(url) === "A"
+          ? dohJson(0, [{ type: 1, data: PUBLIC_A }])
+          : dohJson(0); // NOERROR with no Answer section: NODATA
+      }
+      challengeRequests++;
+      return new Response(KEY_AUTHORIZATION, { status: 200 });
+    });
+
+    const result = await runValidation();
+
+    expect(result.valid).toBe(true);
+    expect(result.addresses).toEqual([PUBLIC_A]);
+    expect(challengeRequests).toBe(1);
+    expect(queries.some((url) => dohRecordType(url) === "A")).toBe(true);
+    expect(queries.some((url) => dohRecordType(url) === "AAAA")).toBe(true);
+  });
+
+  it("accepts a public AAAA record when A is confirmed NODATA", async () => {
+    let challengeRequests = 0;
+
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        return dohRecordType(url) === "AAAA"
+          ? dohJson(0, [{ type: 28, data: PUBLIC_AAAA }])
+          : dohJson(0, []);
+      }
+      challengeRequests++;
+      return new Response(KEY_AUTHORIZATION, { status: 200 });
+    });
+
+    const result = await runValidation();
+
+    expect(result.valid).toBe(true);
+    expect(result.addresses).toEqual([PUBLIC_AAAA]);
+    expect(challengeRequests).toBe(1);
+  });
+
+  it("accepts a target with both public A and public AAAA records", async () => {
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        return dohRecordType(url) === "A"
+          ? dohJson(0, [{ type: 1, data: PUBLIC_A }])
+          : dohJson(0, [{ type: 28, data: PUBLIC_AAAA }]);
+      }
+      return new Response(KEY_AUTHORIZATION, { status: 200 });
+    });
+
+    const result = await runValidation();
+
+    expect(result.valid).toBe(true);
+    expect(result.addresses?.sort()).toEqual([PUBLIC_A, PUBLIC_AAAA].sort());
+  });
+
+  it("rejects a public A record combined with a private AAAA record", async () => {
+    let challengeRequests = 0;
+
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        return dohRecordType(url) === "A"
+          ? dohJson(0, [{ type: 1, data: PUBLIC_A }])
+          : dohJson(0, [{ type: 28, data: "fc00::1" }]);
+      }
+      challengeRequests++;
+      return new Response(KEY_AUTHORIZATION, { status: 200 });
+    });
+
+    const result = await runValidation();
+
+    expect(result.valid).toBe(false);
+    expect(result.errorType).toBe("unauthorized");
+    expect(result.error).toContain("non-public");
+    expect(challengeRequests).toBe(0);
+  });
+
+  it("aborts when the AAAA query times out even though A resolved publicly", async () => {
+    let challengeRequests = 0;
+
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        if (dohRecordType(url) === "A") {
+          return dohJson(0, [{ type: 1, data: PUBLIC_A }]);
+        }
+        return new Promise<Response>(() => {});
+      }
+      challengeRequests++;
+      return new Response(KEY_AUTHORIZATION, { status: 200 });
+    });
+
+    const result = await runValidation({
+      requestTimeoutMs: 20,
+      totalTimeoutMs: 2000,
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.errorType).toBe("dns");
+    expect(result.error).toContain("AAAA");
+    expect(challengeRequests).toBe(0);
+  });
+
+  it("aborts when the A query fails even though AAAA resolved publicly", async () => {
+    let challengeRequests = 0;
+
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        if (dohRecordType(url) === "A") {
+          return new Response("upstream failure", { status: 502 });
+        }
+        return dohJson(0, [{ type: 28, data: PUBLIC_AAAA }]);
+      }
+      challengeRequests++;
+      return new Response(KEY_AUTHORIZATION, { status: 200 });
+    });
+
+    const result = await runValidation();
+
+    expect(result.valid).toBe(false);
+    expect(result.errorType).toBe("dns");
+    expect(result.error).toContain("A");
+    expect(challengeRequests).toBe(0);
+  });
+
+  it("rejects NXDOMAIN instead of continuing with the other family", async () => {
+    let challengeRequests = 0;
+
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        return dohRecordType(url) === "A" ? dohJson(3) : addressAnswer("AAAA", PUBLIC_AAAA);
+      }
+      challengeRequests++;
+      return new Response(KEY_AUTHORIZATION, { status: 200 });
+    });
+
+    const result = await runValidation();
+
+    expect(result.valid).toBe(false);
+    expect(result.errorType).toBe("dns");
+    expect(result.error).toContain("does not exist");
+    expect(challengeRequests).toBe(0);
+  });
+
+  it("rejects SERVFAIL and other non-NOERROR statuses", async () => {
+    for (const status of [2, 5]) {
+      install(async (input) => {
+        const url = String(input);
+        if (isDohUrl(url)) {
+          return dohJson(status);
+        }
+        return new Response(KEY_AUTHORIZATION, { status: 200 });
+      });
+
+      const result = await runValidation();
+      expect(result.valid, `status ${status}`).toBe(false);
+      expect(result.errorType, `status ${status}`).toBe("dns");
+      expect(result.error, `status ${status}`).toContain(`status ${status}`);
+    }
+  });
+
+  it("rejects unparsable or malformed DoH responses", async () => {
+    const malformedResponses: Array<[string, Response]> = [
+      ["non-JSON body", new Response("not json", { status: 200 })],
+      ["missing status", new Response(JSON.stringify({ Answer: [] }), { status: 200 })],
+      [
+        "non-array answer",
+        new Response(JSON.stringify({ Status: 0, Answer: "nope" }), { status: 200 }),
+      ],
+      [
+        "answer without data",
+        new Response(JSON.stringify({ Status: 0, Answer: [{ type: 1 }] }), {
+          status: 200,
+        }),
+      ],
+      [
+        "invalid A record",
+        new Response(
+          JSON.stringify({ Status: 0, Answer: [{ type: 1, data: "not-an-address" }] }),
+          { status: 200 }
+        ),
+      ],
+    ];
+
+    for (const [name, malformed] of malformedResponses) {
+      let challengeRequests = 0;
+      install(async (input) => {
+        const url = String(input);
+        if (isDohUrl(url)) {
+          return dohRecordType(url) === "A"
+            ? malformed
+            : dohJson(0, [{ type: 28, data: PUBLIC_AAAA }]);
+        }
+        challengeRequests++;
+        return new Response(KEY_AUTHORIZATION, { status: 200 });
+      });
+
+      const result = await runValidation();
+      expect(result.valid, name).toBe(false);
+      expect(result.errorType, name).toBe("dns");
+      expect(challengeRequests, name).toBe(0);
+    }
+  });
+
+  it("follows a CNAME to a public address", async () => {
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        const name = dohName(url);
+        const type = dohRecordType(url);
+        if (type === "A") {
+          return name === "example.com"
+            ? dohJson(0, [{ type: 5, data: "cdn.example.net." }])
+            : dohJson(0, [{ type: 1, data: PUBLIC_A }]);
+        }
+        return dohJson(0, []);
+      }
+      return new Response(KEY_AUTHORIZATION, { status: 200 });
+    });
+
+    const result = await runValidation();
+
+    expect(result.valid).toBe(true);
+    expect(result.addresses).toEqual([PUBLIC_A]);
+  });
+
+  it("rejects a CNAME whose final address is non-public", async () => {
+    let challengeRequests = 0;
+
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        const name = dohName(url);
+        const type = dohRecordType(url);
+        if (type === "A") {
+          return name === "example.com"
+            ? dohJson(0, [{ type: 5, data: "internal.example.net." }])
+            : dohJson(0, [{ type: 1, data: "10.0.0.1" }]);
+        }
+        return dohJson(0, []);
+      }
+      challengeRequests++;
+      return new Response(KEY_AUTHORIZATION, { status: 200 });
+    });
+
+    const result = await runValidation();
+
+    expect(result.valid).toBe(false);
+    expect(result.errorType).toBe("unauthorized");
+    expect(result.error).toContain("non-public");
+    expect(challengeRequests).toBe(0);
+  });
+
+  it("rejects an alias answer that carries a non-public final address", async () => {
+    let challengeRequests = 0;
+
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        return dohRecordType(url) === "A"
+          ? dohJson(0, [
+              { type: 5, data: "internal.example.net." },
+              { type: 1, data: "10.0.0.1" },
+            ])
+          : dohJson(0, []);
+      }
+      challengeRequests++;
+      return new Response(KEY_AUTHORIZATION, { status: 200 });
+    });
+
+    const result = await runValidation();
+
+    expect(result.valid).toBe(false);
+    expect(result.errorType).toBe("unauthorized");
+    expect(challengeRequests).toBe(0);
+  });
+
+  it("rejects a CNAME whose target is an IP literal", async () => {
+    let challengeRequests = 0;
+
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        return dohRecordType(url) === "A"
+          ? dohJson(0, [{ type: 5, data: "127.0.0.1" }])
+          : dohJson(0, []);
+      }
+      challengeRequests++;
+      return new Response(KEY_AUTHORIZATION, { status: 200 });
+    });
+
+    const result = await runValidation();
+
+    expect(result.valid).toBe(false);
+    expect(result.errorType).toBe("dns");
+    expect(result.error).toContain("CNAME");
+    expect(challengeRequests).toBe(0);
+  });
+
+  it("rejects a redirect whose target DNS resolution fails, before requesting it", async () => {
+    const requests: string[] = [];
+
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        if (dohName(url) === "example.com") {
+          return dohRecordType(url) === "A"
+            ? dohJson(0, [{ type: 1, data: PUBLIC_A }])
+            : dohJson(0, []);
+        }
+        return new Response("upstream failure", { status: 502 });
+      }
+      requests.push(url);
+      return new Response(null, {
+        status: 302,
+        headers: { Location: "https://redirect.example.net/challenge" },
+      });
+    });
+
+    const result = await runValidation();
+
+    expect(result.valid).toBe(false);
+    expect(result.errorType).toBe("dns");
+    expect(requests).toHaveLength(1);
+    expect(requests.some((url) => url.includes("redirect.example.net"))).toBe(false);
+  });
+
+  it("retries the alternate DoH provider after a transport-level failure", async () => {
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        if (!isGoogleDoh(url)) {
+          return new Response("upstream failure", { status: 502 });
+        }
+        return dohRecordType(url) === "A"
+          ? dohJson(0, [{ type: 1, data: PUBLIC_A }])
+          : dohJson(0);
+      }
+      return new Response(KEY_AUTHORIZATION, { status: 200 });
+    });
+
+    const result = await runValidation();
+
+    expect(result.valid).toBe(true);
+    expect(result.addresses).toEqual([PUBLIC_A]);
+  });
+
+  it("fails a target with no addresses in either family", async () => {
+    install(async (input) => {
+      const url = String(input);
+      if (isDohUrl(url)) {
+        return dohJson(0, []);
+      }
+      return new Response(KEY_AUTHORIZATION, { status: 200 });
+    });
+
+    const result = await runValidation();
+
+    expect(result.valid).toBe(false);
+    expect(result.errorType).toBe("dns");
+    expect(result.error).toContain("no A or AAAA records");
+  });
+});
+
 describe("HTTP-01 validation", () => {
   it("accepts a correct key authorization and ignores trailing whitespace", async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];

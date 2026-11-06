@@ -1,7 +1,11 @@
 import { AcmeEnv, CONFIG, getTermsOfServiceUrl } from "../config";
 import { generateNonceString } from "../crypto/nonce";
-import { verifyAcmeJws } from "../crypto/jws";
-import { issueCertificateFromCsr, parseAndVerifyCsr } from "../crypto/x509";
+import { verifyAcmeJws, exportPublicJwkSpki } from "../crypto/jws";
+import {
+  issueCertificateFromCsr,
+  parseAndVerifyCsr,
+  ParsedCsr,
+} from "../crypto/x509";
 import { selectIntermediateCa } from "../crypto/ca";
 import { validateCaaForOrder } from "../dns/caa";
 import { Database } from "../db/queries";
@@ -10,7 +14,7 @@ import { AcmeError } from "../errors";
 import { checkAriRenewalEligibility } from "../ari/window";
 import { RateLimiter } from "../ratelimit/limiter";
 import { buildChallengesForAuthorization } from "../acme/challenges";
-import { isValidDnsIdentifier } from "../acme/identifiers";
+import { validateDnsIdentifier } from "../acme/identifiers";
 import { syncOrderState } from "../acme/state";
 
 interface NewOrderPayload {
@@ -69,11 +73,17 @@ export async function handleNewOrder(
       );
     }
 
-    const domain = ident.value.trim().toLowerCase();
-    if (!isValidDnsIdentifier(domain)) {
-      throw AcmeError.rejectedIdentifier(`Invalid domain syntax: '${ident.value}'`);
+    // A DNS identifier must be a DNS name, not an IP address literal. The
+    // shared validator also rejects legacy numeric IPv4 notations that the URL
+    // parser would turn into an IP address. Nothing is persisted before every
+    // identifier has been validated.
+    const validated = validateDnsIdentifier(ident.value);
+    if (!validated.ok) {
+      throw validated.errorType === "malformed"
+        ? AcmeError.malformed(validated.detail)
+        : AcmeError.rejectedIdentifier(validated.detail);
     }
-    domainList.push(domain);
+    domainList.push(validated.value);
   }
 
   // Evaluate ARI Renewal & Exemption
@@ -263,6 +273,18 @@ export async function handleFinalizeOrder(
     );
   }
 
+  // RFC 8555 § 11.1 Key Selection: the CSR public key must differ from the
+  // account key authenticating this request, and must not reuse a key already
+  // registered to another account. This runs before the order is claimed and
+  // before any intermediate CA is invoked, so no non-compliant certificate
+  // can be issued.
+  await assertCsrKeyIsNotAnAccountKey(
+    parsedCsr,
+    verified.jwk,
+    verified.header.alg,
+    database
+  );
+
   // Serialize finalization: only one request may move a ready order to
   // processing and issue a certificate.
   const claimed = await database.claimOrderForFinalize(orderId);
@@ -393,6 +415,60 @@ export async function handleFinalizeOrder(
     // deliberately marked invalid above) so the client can retry.
     await database.releaseOrderFromProcessing(orderId);
     throw err;
+  }
+}
+
+function equalPublicKeyBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let difference = 0;
+  for (let i = 0; i < a.length; i++) {
+    difference |= a[i] ^ b[i];
+  }
+  return difference === 0;
+}
+
+/**
+ * RFC 8555 § 11.1: the CSR must not use the account key that authenticates the
+ * request, and the server also rejects a key that is already registered to
+ * another account.
+ *
+ * Account keys are compared through their canonical SPKI DER encoding rather
+ * than the stored JWK JSON, whose field order and encoding are not canonical.
+ * The cross-account check uses the accounts table's UNIQUE thumbprint index
+ * (the RFC 7638 thumbprint of the account key), so it is a point lookup rather
+ * than a table scan.
+ */
+async function assertCsrKeyIsNotAnAccountKey(
+  parsedCsr: ParsedCsr,
+  accountJwk: JsonWebKey,
+  accountAlgorithm: string,
+  database: Database
+): Promise<void> {
+  let accountSpki: Uint8Array;
+  try {
+    accountSpki = await exportPublicJwkSpki(accountJwk, accountAlgorithm);
+  } catch {
+    // A comparison that cannot be performed must never be treated as a pass.
+    // The account key was just used to verify the request signature, so this
+    // signals a server-side problem rather than a bad CSR.
+    throw AcmeError.serverInternal(
+      "Unable to compare the CSR public key with the account public key"
+    );
+  }
+
+  if (equalPublicKeyBytes(accountSpki, parsedCsr.publicKeySpki)) {
+    throw AcmeError.badCSR(
+      "The CSR public key must not be the ACME account key used to authenticate this request"
+    );
+  }
+
+  const existingAccount = await database.getAccountByThumbprint(
+    parsedCsr.publicKeyThumbprint
+  );
+  if (existingAccount) {
+    throw AcmeError.badCSR(
+      "The CSR public key is already registered to an ACME account; a distinct certificate key is required"
+    );
   }
 }
 

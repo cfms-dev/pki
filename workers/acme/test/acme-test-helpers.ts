@@ -8,11 +8,15 @@ import { calculateJwkThumbprint } from "../src/crypto/jws";
 
 export const ACME_BASE_URL = "https://acme.test";
 
+export type AccountKeyAlgorithm = "ES256" | "RS256" | "EdDSA";
+
 export interface TestAccount {
   keys: CryptoKeyPair;
   jwk: JsonWebKey;
   thumbprint: string;
   kid: string;
+  /** JWS algorithm used to sign requests for this account. Defaults to ES256. */
+  alg?: AccountKeyAlgorithm;
 }
 
 export interface TestEnvironment {
@@ -96,12 +100,13 @@ export async function makeJwsRequest(
   env: AcmeEnv,
   url: string,
   payload: Record<string, unknown> | "",
-  account: Pick<TestAccount, "keys" | "jwk" | "kid">,
+  account: Pick<TestAccount, "keys" | "jwk" | "kid" | "alg">,
   nonce: string,
   keyMode: "jwk" | "kid" = "kid"
 ): Promise<{ response: Response; nextNonce: string }> {
+  const alg = account.alg ?? "ES256";
   const protectedHeader: Record<string, unknown> = {
-    alg: "ES256",
+    alg,
     nonce,
     url,
   };
@@ -117,7 +122,11 @@ export async function makeJwsRequest(
       : base64UrlEncode(new TextEncoder().encode(JSON.stringify(payload)));
 
   const signature = await crypto.subtle.sign(
-    { name: "ECDSA", hash: "SHA-256" },
+    alg === "ES256"
+      ? { name: "ECDSA", hash: "SHA-256" }
+      : alg === "RS256"
+        ? { name: "RSASSA-PKCS1-v1_5" }
+        : { name: "Ed25519" },
     account.keys.privateKey,
     new TextEncoder().encode(`${protectedB64}.${payloadB64}`)
   );
@@ -167,7 +176,7 @@ export async function registerAccount(env: AcmeEnv): Promise<TestAccount> {
   const kid = response.response.headers.get("Location");
   if (!kid) throw new Error("Account response did not include Location");
 
-  return { keys, jwk, thumbprint, kid };
+  return { keys, jwk, thumbprint, kid, alg: "ES256" };
 }
 
 export async function createOrder(

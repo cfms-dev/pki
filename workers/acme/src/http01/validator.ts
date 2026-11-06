@@ -1,5 +1,6 @@
 import { CONFIG } from "../config";
 import {
+  isIpLiteralIdentifier,
   isWildcardDnsName,
   isValidDnsIdentifier,
   normalizeDnsName,
@@ -39,19 +40,28 @@ export interface Http01ValidationOptions {
   now?: () => number;
 }
 
-interface DohAnswer {
-  type: number;
-  data: string;
-}
-
-interface DohResponse {
-  Status?: number;
-  Answer?: DohAnswer[];
-}
-
 interface TimedResponse {
   response: Response;
   release: () => void;
+}
+
+type AddressRecordType = "A" | "AAAA";
+
+interface DohRecordSet {
+  addresses: string[];
+  cnames: string[];
+}
+
+/**
+ * A definitive DNS-level failure (NXDOMAIN, SERVFAIL, a malformed DoH answer,
+ * an unusable CNAME target, ...). Asking another DoH provider cannot make the
+ * result interpretable, so the whole validation fails closed.
+ */
+class DnsQueryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DnsQueryError";
+  }
 }
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -59,6 +69,15 @@ const DOH_PROVIDERS = [
   "https://cloudflare-dns.com/dns-query",
   "https://dns.google/resolve",
 ];
+const DOH_STATUS_NOERROR = 0;
+const DOH_STATUS_NXDOMAIN = 3;
+const CNAME_RECORD_TYPE = 5;
+const A_RECORD_TYPE = 1;
+const AAAA_RECORD_TYPE = 28;
+// A recursive resolver normally returns the whole CNAME chain plus the final
+// address records. The explicit follow-up exists only for responses that stop
+// at a CNAME, and is bounded to keep a hostile chain from consuming the budget.
+const MAX_CNAME_FOLLOWS = 4;
 const BLOCKED_HOST_SUFFIXES = [
   "localhost",
   "local",
@@ -130,14 +149,9 @@ function stripIpv6Brackets(hostname: string): string {
 
 /** Rejects IPv4/IPv6 literals, including the legacy numeric IPv4 notations. */
 export function isIpLiteralHost(hostname: string): boolean {
-  const host = stripIpv6Brackets(hostname);
-  if (host.includes(":")) return true;
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return true;
-  if (/^\d+$/.test(host)) return true;
-  if (/^0x[0-9a-f]+$/i.test(host)) return true;
-  // Forms such as 127.1 are normalised by the URL parser, but keep this
-  // explicit check as a second line of defence.
-  return /^[0-9.]+$/.test(host);
+  // Delegates to the shared identifier check so identifier validation and
+  // redirect validation agree on what the URL parser considers an IP address.
+  return isIpLiteralIdentifier(stripIpv6Brackets(hostname));
 }
 
 /** Rejects names that are by definition local, private, or non-public. */
@@ -415,7 +429,7 @@ async function fetchDohJson(
   fetchImpl: typeof fetch,
   url: string,
   timeoutMs: number
-): Promise<DohResponse> {
+): Promise<unknown> {
   const { response, release } = await requestWithTimeout(
     fetchImpl,
     url,
@@ -431,7 +445,7 @@ async function fetchDohJson(
     if (!response.ok) {
       throw new ValidationFetchError();
     }
-    return (await withTimeout(response.json(), timeoutMs)) as DohResponse;
+    return await withTimeout(response.json(), timeoutMs);
   } catch (error) {
     throw networkError(error);
   } finally {
@@ -447,6 +461,213 @@ interface AddressResolutionFailure {
 
 type AddressResolution = { ok: true; addresses: string[] } | AddressResolutionFailure;
 
+/**
+ * Validates and normalises one DoH JSON response.
+ *
+ * Every A/AAAA record in the answer must be a well-formed address of the
+ * requested family, and every CNAME target must be a usable DNS name. A
+ * response that cannot be interpreted unambiguously is a failure, not an empty
+ * result: NOERROR with no answers (NODATA) is the only allowed empty form.
+ */
+function parseDohAnswer(
+  payload: unknown,
+  recordType: AddressRecordType,
+  queriedName: string
+): DohRecordSet {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    throw new DnsQueryError("DoH response was not a JSON object");
+  }
+  const response = payload as Record<string, unknown>;
+
+  const status = response.Status;
+  if (typeof status !== "number" || !Number.isInteger(status)) {
+    throw new DnsQueryError("DoH response did not contain a DNS status");
+  }
+  if (status === DOH_STATUS_NXDOMAIN) {
+    throw new DnsQueryError(`DNS name '${queriedName}' does not exist`);
+  }
+  if (status !== DOH_STATUS_NOERROR) {
+    throw new DnsQueryError(
+      `DNS query for '${queriedName}' returned unusable status ${status}`
+    );
+  }
+
+  const addresses: string[] = [];
+  const cnames: string[] = [];
+  const answers = response.Answer;
+  if (answers === undefined || answers === null) {
+    // NOERROR/NODATA: the name exists but has no records of this type.
+    return { addresses, cnames };
+  }
+  if (!Array.isArray(answers)) {
+    throw new DnsQueryError("DoH response contained a malformed Answer section");
+  }
+
+  for (const entry of answers) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new DnsQueryError("DoH response contained a malformed answer record");
+    }
+    const record = entry as Record<string, unknown>;
+    const type = record.type;
+    if (typeof type !== "number" || !Number.isInteger(type)) {
+      throw new DnsQueryError("DoH response contained an answer without a record type");
+    }
+    if (type !== A_RECORD_TYPE && type !== AAAA_RECORD_TYPE && type !== CNAME_RECORD_TYPE) {
+      continue;
+    }
+
+    const data = record.data;
+    if (typeof data !== "string" || data.trim() === "") {
+      throw new DnsQueryError("DoH response contained an answer record without usable data");
+    }
+    const value = data.trim();
+
+    if (type === A_RECORD_TYPE) {
+      if (recordType !== "A") continue;
+      if (parseIpv4(value) === null) {
+        throw new DnsQueryError("DoH response contained an invalid A record");
+      }
+      addresses.push(value);
+    } else if (type === AAAA_RECORD_TYPE) {
+      if (recordType !== "AAAA") continue;
+      if (parseIpv6(value) === null) {
+        throw new DnsQueryError("DoH response contained an invalid AAAA record");
+      }
+      addresses.push(value);
+    } else {
+      // The recursive resolver already follows aliases, so the returned
+      // A/AAAA records belong to the end of the chain and are checked above.
+      // The CNAME target itself must still be a usable DNS name: an IP-literal
+      // or otherwise invalid alias is never accepted.
+      const target = normalizeDnsName(value);
+      if (isIpLiteralIdentifier(target) || !isValidDnsIdentifier(target, false)) {
+        throw new DnsQueryError("DoH response contained an invalid CNAME target");
+      }
+      cnames.push(target);
+    }
+  }
+
+  return { addresses, cnames };
+}
+
+async function queryDohRecords(
+  provider: string,
+  name: string,
+  recordType: AddressRecordType,
+  fetchImpl: typeof fetch,
+  deadline: number,
+  requestTimeoutMs: number,
+  now: () => number
+): Promise<DohRecordSet> {
+  const remaining = deadline - now();
+  if (remaining <= 0) {
+    throw new ValidationTimeoutError();
+  }
+  const timeoutMs = Math.max(1, Math.min(requestTimeoutMs, remaining));
+  const url = `${provider}?name=${encodeURIComponent(name)}&type=${recordType}`;
+  const payload = await fetchDohJson(fetchImpl, url, timeoutMs);
+  return parseDohAnswer(payload, recordType, name);
+}
+
+/**
+ * Resolves one address family through one DoH provider. When the response
+ * stops at a CNAME (no address records in the same answer), the alias target is
+ * queried explicitly so the final address is still checked. Returns an empty
+ * array only for a confirmed NOERROR/NODATA result.
+ */
+async function resolveAddressFamilyWithProvider(
+  provider: string,
+  hostname: string,
+  recordType: AddressRecordType,
+  fetchImpl: typeof fetch,
+  deadline: number,
+  requestTimeoutMs: number,
+  now: () => number
+): Promise<string[]> {
+  let name = hostname;
+  const visited = new Set<string>();
+
+  for (let depth = 0; depth <= MAX_CNAME_FOLLOWS; depth++) {
+    if (visited.has(name)) {
+      throw new DnsQueryError("DNS CNAME loop detected");
+    }
+    visited.add(name);
+
+    const records = await queryDohRecords(
+      provider,
+      name,
+      recordType,
+      fetchImpl,
+      deadline,
+      requestTimeoutMs,
+      now
+    );
+    if (records.addresses.length > 0) {
+      return records.addresses;
+    }
+    if (records.cnames.length === 0) {
+      return [];
+    }
+    const next = records.cnames[records.cnames.length - 1];
+    if (next === name) {
+      throw new DnsQueryError("DNS CNAME loop detected");
+    }
+    name = next;
+  }
+
+  throw new DnsQueryError("DNS CNAME chain is too long");
+}
+
+/**
+ * Resolves one address family, using the second DoH provider only for
+ * transport-level failures. A definitive answer (including NXDOMAIN, an error
+ * status, or a malformed answer) is never re-interpreted by another resolver.
+ */
+async function resolveAddressFamily(
+  hostname: string,
+  recordType: AddressRecordType,
+  fetchImpl: typeof fetch,
+  deadline: number,
+  requestTimeoutMs: number,
+  now: () => number
+): Promise<string[]> {
+  let lastError: Error | null = null;
+  for (const provider of DOH_PROVIDERS) {
+    try {
+      return await resolveAddressFamilyWithProvider(
+        provider,
+        hostname,
+        recordType,
+        fetchImpl,
+        deadline,
+        requestTimeoutMs,
+        now
+      );
+    } catch (error) {
+      if (error instanceof DnsQueryError) {
+        throw error;
+      }
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  throw lastError ?? new DnsQueryError("DNS resolution failed");
+}
+
+/**
+ * Resolves the target through public DNS-over-HTTPS and requires a definitive,
+ * usable answer for *both* the A and the AAAA family before the HTTP request
+ * is allowed to proceed. This is fail-closed:
+ *
+ * - one family may legitimately be empty (NOERROR/NODATA), but the other must
+ *   produce at least one confirmed address;
+ * - a timeout, transport error, malformed JSON, unexpected DNS status, invalid
+ *   record data, or an unusable CNAME target aborts the validation;
+ * - every returned address must be globally routable unicast.
+ *
+ * The DoH answer is advisory: Workers fetch() resolves DNS independently and
+ * cannot be pinned to these addresses, so this is not a complete SSRF or DNS
+ * rebinding defense (see the README "Operational limitations" section).
+ */
 async function resolvePublicAddresses(
   hostname: string,
   fetchImpl: typeof fetch,
@@ -455,49 +676,32 @@ async function resolvePublicAddresses(
   now: () => number
 ): Promise<AddressResolution> {
   const addresses: string[] = [];
-  let sawDnsResponse = false;
 
-  for (const provider of DOH_PROVIDERS) {
-    for (const recordType of ["A", "AAAA"]) {
-      const remaining = deadline - now();
-      if (remaining <= 0) {
-        return {
-          ok: false,
-          errorType: "connection",
-          error: "HTTP-01 validation timed out",
-        };
-      }
-      const timeoutMs = Math.max(1, Math.min(requestTimeoutMs, remaining));
-      const url = `${provider}?name=${encodeURIComponent(hostname)}&type=${recordType}`;
-      try {
-        const data = await fetchDohJson(fetchImpl, url, timeoutMs);
-        if (typeof data.Status === "number") {
-          sawDnsResponse = true;
-        }
-        if (data.Status === 0 && Array.isArray(data.Answer)) {
-          for (const answer of data.Answer) {
-            if (answer.type === 1 || answer.type === 28) {
-              if (typeof answer.data === "string" && answer.data.trim()) {
-                addresses.push(answer.data.trim());
-              }
-            }
-          }
-        }
-      } catch {
-        // Try the next record type/provider; total deadline still applies.
-      }
+  for (const recordType of ["A", "AAAA"] as const) {
+    let familyAddresses: string[];
+    try {
+      familyAddresses = await resolveAddressFamily(
+        hostname,
+        recordType,
+        fetchImpl,
+        deadline,
+        requestTimeoutMs,
+        now
+      );
+    } catch (error) {
+      const detail =
+        error instanceof DnsQueryError ? error.message : "DNS query failed";
+      return {
+        ok: false,
+        errorType: "dns",
+        error: `DNS resolution for the validation target failed (${recordType}): ${detail}`,
+      };
     }
+    addresses.push(...familyAddresses);
   }
 
   const unique = Array.from(new Set(addresses));
   if (unique.length === 0) {
-    if (!sawDnsResponse) {
-      return {
-        ok: false,
-        errorType: "dns",
-        error: "DNS resolution for the validation target failed",
-      };
-    }
     return {
       ok: false,
       errorType: "dns",
@@ -632,9 +836,11 @@ export async function validateHttp01Challenge(
     // performs its own DNS resolution and offers no supported way to pin the
     // connection to the addresses checked here, so a DNS-rebinding
     // authoritative server can answer differently to the DoH resolver and to
-    // the fetch() resolver. The check rejects targets that are known to be
-    // non-public; it is not a complete SSRF defense. See README "Operational
-    // limitations".
+    // the fetch() resolver. The check is fail-closed: it rejects the target
+    // unless both the A and the AAAA family produced a definitive answer and
+    // every returned address is public. It is not a complete SSRF defense.
+    // See README "Operational limitations". Every redirect hop repeats this
+    // check before the next request is made.
     const resolution = await resolvePublicAddresses(
       normalizeDnsName(stripIpv6Brackets(current.hostname)),
       fetchImpl,
