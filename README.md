@@ -3,7 +3,7 @@
 > [!NOTE]
 > To obtain a certificate for a domain you control, you can use any ACME-compatible client with the following directory URL:
 >
-> https://acme.pki.crpteam.club/directory
+> https://acme.cfms-pki.crpteam.club/directory
 
 A lightweight, GitOps-driven PKI toolkit and stateless CRL distribution system for the CFMS ecosystem.
 
