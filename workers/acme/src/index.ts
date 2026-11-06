@@ -13,7 +13,18 @@ import { handleGetCertificate } from "./routes/certificate";
 import { handleRevokeCert } from "./routes/revoke";
 import { handleRenewalInfo } from "./routes/ari";
 
-let schemaInitialized = false;
+let schemaInit: Promise<void> | null = null;
+
+function ensureSchema(database: Database): Promise<void> {
+  if (!schemaInit) {
+    schemaInit = database.initSchema().catch((error: unknown) => {
+      // Allow a later request to retry schema initialization.
+      schemaInit = null;
+      throw error;
+    });
+  }
+  return schemaInit;
+}
 
 export default {
   async fetch(
@@ -23,19 +34,10 @@ export default {
   ): Promise<Response> {
     const url = new URL(request.url);
     const baseUrl = env.ACME_BASE_URL || url.origin;
+    const path = url.pathname.replace(/\/+$/, "") || "/";
     const database = new Database(env.DB);
 
-    // Auto-initialize schema on startup
-    if (!schemaInitialized) {
-      try {
-        await database.initSchema();
-        schemaInitialized = true;
-      } catch {
-        // Continue if already initialized
-      }
-    }
-
-    // CORS preflight
+    // CORS preflight does not touch the database.
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
@@ -48,8 +50,22 @@ export default {
       });
     }
 
+    // The directory endpoint never touches D1, so read-only discovery requests
+    // must not pay for schema initialization. Every other route initializes
+    // lazily on first use.
+    const isDirectoryRead =
+      (path === "/" || path === "/directory") &&
+      (request.method === "GET" || request.method === "HEAD");
+    if (!isDirectoryRead) {
+      try {
+        await ensureSchema(database);
+      } catch {
+        // Continue; initialization is retried on the next request.
+      }
+    }
+
     try {
-      const response = await routeRequest(request, url, database, baseUrl, env);
+      const response = await routeRequest(request, path, database, baseUrl, env);
 
       // In RFC 8555 § 6.5.1, the server MUST include Replay-Nonce on POST responses
       // and Link rel="index" to the ACME directory.
@@ -99,13 +115,11 @@ export default {
 
 async function routeRequest(
   request: Request,
-  url: URL,
+  path: string,
   database: Database,
   baseUrl: string,
   env: AcmeEnv
 ): Promise<Response> {
-  const path = url.pathname.replace(/\/+$/, "") || "/";
-
   // Directory
   if (path === "/directory" || path === "/") {
     return handleDirectory(request, env, baseUrl);

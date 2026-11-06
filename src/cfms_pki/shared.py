@@ -5,30 +5,38 @@ from datetime import datetime
 from pathlib import Path
 
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, mldsa, rsa
 
-SUPPORTED_PRIVATE_KEY_TYPES = (
+SIGNATURE_ONLY_PRIVATE_KEY_TYPES = (
     mldsa.MLDSA65PrivateKey,
     mldsa.MLDSA87PrivateKey,
     mldsa.MLDSA44PrivateKey,
     ed25519.Ed25519PrivateKey,
     ed448.Ed448PrivateKey,
+)
+
+SUPPORTED_PRIVATE_KEY_TYPES = (
+    *SIGNATURE_ONLY_PRIVATE_KEY_TYPES,
     ec.EllipticCurvePrivateKey,
     rsa.RSAPrivateKey,
 )
 
-SUPPORTED_PUBLIC_KEY_TYPES = (
+SIGNATURE_ONLY_PUBLIC_KEY_TYPES = (
     mldsa.MLDSA65PublicKey,
     mldsa.MLDSA87PublicKey,
     mldsa.MLDSA44PublicKey,
     ed25519.Ed25519PublicKey,
     ed448.Ed448PublicKey,
+)
+
+SUPPORTED_PUBLIC_KEY_TYPES = (
+    *SIGNATURE_ONLY_PUBLIC_KEY_TYPES,
     ec.EllipticCurvePublicKey,
     rsa.RSAPublicKey,
 )
 
-VALID_REASONS = {
+REVOCATION_REASONS = (
     "key_compromise",
     "ca_compromise",
     "affiliation_changed",
@@ -37,7 +45,21 @@ VALID_REASONS = {
     "certificate_hold",
     "privilege_withdrawn",
     "aa_compromise",
-}
+)
+
+VALID_REASONS = frozenset(REVOCATION_REASONS)
+
+
+def signing_hash_algorithm(key: object) -> hashes.HashAlgorithm | None:
+    """Return None for schemes that embed the digest (EdDSA/ML-DSA)."""
+    if isinstance(key, SIGNATURE_ONLY_PRIVATE_KEY_TYPES):
+        return None
+    return hashes.SHA256()
+
+
+def format_rfc3339(value: datetime) -> str:
+    """Format an aware UTC datetime as RFC 3339 with a 'Z' suffix."""
+    return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def load_ca_key(ca_id: str, pk_env: str):
@@ -69,18 +91,12 @@ def load_ca_key(ca_id: str, pk_env: str):
 def resolve_ca_path(location: str, registry_dir: Path) -> Path:
     """Resolve the location of a CA certificate file."""
     loc = Path(location)
-    if loc.is_absolute() and loc.exists():
-        return loc
     if loc.exists():
         return loc
 
-    candidate = registry_dir.parent / loc
-    if candidate.exists():
-        return candidate
-
-    candidate2 = registry_dir / loc
-    if candidate2.exists():
-        return candidate2
+    for candidate in (registry_dir.parent / loc, registry_dir / loc):
+        if candidate.exists():
+            return candidate
 
     raise FileNotFoundError(f"CA certificate file not found: {location}")
 
@@ -148,19 +164,6 @@ def authority_key_identifier(ca: x509.Certificate) -> x509.AuthorityKeyIdentifie
     except x509.ExtensionNotFound:
         return x509.AuthorityKeyIdentifier.from_issuer_public_key(public_key)
     return x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(ski)
-
-
-def parse_serial(value: str) -> int:
-    """Accept decimal serials or hexadecimal serials prefixed with 0x."""
-    try:
-        serial = int(value, 0) if value.startswith(("0x", "0X")) else int(value, 10)
-        if serial <= 0:
-            raise ValueError
-        return serial
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            "serial must be a positive decimal integer or 0x-prefixed hex"
-        ) from exc
 
 
 def write_atomic(path: Path, content: bytes) -> None:

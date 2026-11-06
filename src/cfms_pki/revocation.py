@@ -9,16 +9,15 @@ from typing import Any
 
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
-from cryptography.hazmat.primitives.asymmetric import (
-    ec,
-    ed448,
-    ed25519,
-    mldsa,
-    padding,
-    rsa,
-)
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 
-from cfms_pki.shared import VALID_REASONS, resolve_ca_path, write_atomic
+from cfms_pki.shared import (
+    SIGNATURE_ONLY_PUBLIC_KEY_TYPES,
+    VALID_REASONS,
+    format_rfc3339,
+    resolve_ca_path,
+    write_atomic,
+)
 
 KEY_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
@@ -65,16 +64,7 @@ def verify_cert_signature(
             pubkey.verify(
                 cert.signature, cert.tbs_certificate_bytes, ec.ECDSA(hash_algo)
             )
-        elif isinstance(
-            pubkey,
-            (
-                ed25519.Ed25519PublicKey,
-                ed448.Ed448PublicKey,
-                mldsa.MLDSA65PublicKey,
-                mldsa.MLDSA87PublicKey,
-                mldsa.MLDSA44PublicKey,
-            ),
-        ):
+        elif isinstance(pubkey, SIGNATURE_ONLY_PUBLIC_KEY_TYPES):
             pubkey.verify(cert.signature, cert.tbs_certificate_bytes)
         else:
             return False
@@ -136,6 +126,13 @@ def find_matching_cas(
     return matched
 
 
+def _empty_revocation_registry() -> dict[str, Any]:
+    return {
+        "$schema": "../schemas/revocations.schema.json",
+        "revocations": {},
+    }
+
+
 def revoke_certificate(args: argparse.Namespace) -> None:
     """CLI handler for revoking a certificate and recording it in the registry."""
     registry_dir: Path = args.registry_dir
@@ -157,21 +154,13 @@ def revoke_certificate(args: argparse.Namespace) -> None:
             raise FileNotFoundError(f"Certificate file not found: {args.pem}")
         cert = x509.load_pem_x509_certificate(args.pem.read_bytes())
         if cert.not_valid_after_utc <= now:
-            expired_str = (
-                cert.not_valid_after_utc.replace(microsecond=0)
-                .isoformat()
-                .replace("+00:00", "Z")
-            )
             raise ValueError(
-                f"Cannot revoke expired certificate: certificate expired on {expired_str}."
+                "Cannot revoke expired certificate: certificate expired on "
+                f"{format_rfc3339(cert.not_valid_after_utc)}."
             )
         serial_int = cert.serial_number
         serial_hex = f"{serial_int:X}"
-        default_not_after = (
-            cert.not_valid_after_utc.replace(microsecond=0)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
+        default_not_after = format_rfc3339(cert.not_valid_after_utc)
 
         matched_cas = find_matching_cas(cert, cas, registry_dir)
         if len(matched_cas) == 0:
@@ -231,18 +220,13 @@ def revoke_certificate(args: argparse.Namespace) -> None:
     if args.date:
         try:
             dt = datetime.fromisoformat(args.date)
-            revocation_date = (
-                dt.astimezone(UTC)
-                .replace(microsecond=0)
-                .isoformat()
-                .replace("+00:00", "Z")
-            )
+            revocation_date = format_rfc3339(dt.astimezone(UTC))
         except ValueError as exc:
             raise ValueError(
                 f"Invalid --date '{args.date}': must be valid ISO 8601 date-time."
             ) from exc
     else:
-        revocation_date = now.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        revocation_date = format_rfc3339(now)
 
     # Determine not_after
     not_after_str: str | None = None
@@ -250,9 +234,7 @@ def revoke_certificate(args: argparse.Namespace) -> None:
         try:
             dt = datetime.fromisoformat(args.not_after)
             not_after_dt = dt.astimezone(UTC)
-            not_after_str = (
-                not_after_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-            )
+            not_after_str = format_rfc3339(not_after_dt)
         except ValueError as exc:
             raise ValueError(
                 f"Invalid --not-after '{args.not_after}': must be valid ISO 8601 date-time."
@@ -283,18 +265,9 @@ def revoke_certificate(args: argparse.Namespace) -> None:
     revocations_path = registry_dir / "revocations.json"
     if revocations_path.exists():
         raw_text = revocations_path.read_text(encoding="utf-8").strip()
-        if raw_text:
-            rev_data = json.loads(raw_text)
-        else:
-            rev_data = {
-                "$schema": "../schemas/revocations.schema.json",
-                "revocations": {},
-            }
+        rev_data = json.loads(raw_text) if raw_text else _empty_revocation_registry()
     else:
-        rev_data = {
-            "$schema": "../schemas/revocations.schema.json",
-            "revocations": {},
-        }
+        rev_data = _empty_revocation_registry()
 
     revocations_dict = rev_data.setdefault("revocations", {})
     ca_revocations = revocations_dict.setdefault(ca_id, {})

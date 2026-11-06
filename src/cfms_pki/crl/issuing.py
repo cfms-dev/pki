@@ -10,8 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ed448, ed25519, mldsa
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.types import (
     CertificateIssuerPublicKeyTypes,
 )
@@ -29,6 +28,7 @@ from cfms_pki.shared import (
     check_signer,
     load_ca_key,
     resolve_ca_path,
+    signing_hash_algorithm,
     write_atomic,
 )
 
@@ -189,20 +189,7 @@ def issue_crl_for_ca(
     for entry in sorted(revoked.values(), key=lambda e: e.serial_number):
         builder = builder.add_revoked_certificate(entry)
 
-    hash_algorithm = (
-        None
-        if isinstance(
-            key,
-            (
-                ed25519.Ed25519PrivateKey,
-                ed448.Ed448PrivateKey,
-                mldsa.MLDSA65PrivateKey,
-                mldsa.MLDSA87PrivateKey,
-                mldsa.MLDSA44PrivateKey,
-            ),
-        )
-        else hashes.SHA256()
-    )
+    hash_algorithm = signing_hash_algorithm(key)
     crl = builder.sign(private_key=key, algorithm=hash_algorithm)
 
     public_key = ca_cert.public_key()

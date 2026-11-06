@@ -7,14 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, mldsa, rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, mldsa, rsa
 from cryptography.x509.oid import NameOID
 
 from cfms_pki.revocation import verify_cert_signature
 from cfms_pki.shared import (
     SUPPORTED_PRIVATE_KEY_TYPES,
     authority_key_identifier,
+    signing_hash_algorithm,
     write_atomic,
 )
 
@@ -132,22 +133,7 @@ def build_ca_certificate(
             critical=False,
         )
 
-    # Determine hash algorithm
-    hash_algorithm = (
-        None
-        if isinstance(
-            signing_key,
-            (
-                ed25519.Ed25519PrivateKey,
-                ed448.Ed448PrivateKey,
-                mldsa.MLDSA65PrivateKey,
-                mldsa.MLDSA87PrivateKey,
-                mldsa.MLDSA44PrivateKey,
-            ),
-        )
-        else hashes.SHA256()
-    )
-
+    hash_algorithm = signing_hash_algorithm(signing_key)
     cert = builder.sign(private_key=signing_key, algorithm=hash_algorithm)
 
     # Self-validation

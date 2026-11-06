@@ -6,12 +6,11 @@ import { base64UrlDecode } from "./nonce";
 import { bytesToHex, computeCertId } from "../ari/cert-id";
 import {
   importCaPrivateKey,
-  pemToDer,
   SelectedIntermediateCa,
   selectIntermediateCa,
 } from "./ca";
 
-export { pemToDer, importCaPrivateKey };
+export { importCaPrivateKey };
 
 export interface ParsedCsr {
   csr: x509.Pkcs10CertificateRequest;
@@ -129,7 +128,7 @@ export async function issueCertificateFromCsr(
 ): Promise<IssuedCertificate> {
   const selected = explicitCa || (await selectIntermediateCa(env));
   const caCertPem = selected.certPem;
-  const caCert = new x509.X509Certificate(caCertPem);
+  const caCert = selected.cert;
   const caPrivateKey = selected.privateKey;
 
   const now = new Date();

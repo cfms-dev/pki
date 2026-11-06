@@ -1,6 +1,11 @@
 # CFMS Public Key Infrastructure (PKI)
 
-> A lightweight, GitOps-driven PKI toolkit and stateless CRL distribution system for the CFMS ecosystem.
+> [!NOTE]
+> To obtain a certificate for a domain you control, you can use any ACME-compatible client with the following directory URL:
+>
+> https://acme.pki.crpteam.club/directory
+
+A lightweight, GitOps-driven PKI toolkit and stateless CRL distribution system for the CFMS ecosystem.
 
 CFMS-PKI provides automated X.509 CA management and certificate revocation list (CRL) distribution without the overhead of heavy database infrastructure. It pairs declarative GitOps workflows with modern cryptography to ensure reliable, zero-maintenance PKI operations.
 

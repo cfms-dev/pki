@@ -6,6 +6,7 @@ from pathlib import Path
 from cfms_pki.ca_gen import generate_ca, register_gen_ca_cli
 from cfms_pki.crl.issuing import issue_crl
 from cfms_pki.revocation import revoke_certificate
+from cfms_pki.shared import REVOCATION_REASONS
 
 
 def main() -> None:
@@ -100,16 +101,7 @@ def main() -> None:
     )
     revoke.add_argument(
         "--reason",
-        choices=[
-            "key_compromise",
-            "ca_compromise",
-            "affiliation_changed",
-            "superseded",
-            "cessation_of_operation",
-            "certificate_hold",
-            "privilege_withdrawn",
-            "aa_compromise",
-        ],
+        choices=REVOCATION_REASONS,
         help="revocation reason",
     )
     revoke.add_argument(

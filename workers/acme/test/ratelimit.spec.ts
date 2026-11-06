@@ -3,6 +3,7 @@ import { createMockD1Database } from "./mock-d1";
 import { Database } from "../src/db/queries";
 import { RateLimiter } from "../src/ratelimit/limiter";
 import { AcmeError } from "../src/errors";
+import { CONFIG } from "../src/config";
 
 describe("Rate Limiting & ARI Renewal Exemption", () => {
   let db: Database;
@@ -48,6 +49,28 @@ describe("Rate Limiting & ARI Renewal Exemption", () => {
     // But an ARI Renewal order (isAriRenewal = true) is EXEMPT and succeeds!
     await expect(
       limiter.checkNewOrderLimits("acc-1", domains, true, now)
+    ).resolves.not.toThrow();
+  });
+
+  it("should reset the rate limit window after it elapses", async () => {
+    const domains = ["example.com"];
+    const now = 1700000000;
+
+    for (let i = 0; i < CONFIG.RATE_LIMIT_DUPLICATE_CERTS; i++) {
+      await limiter.checkNewOrderLimits("acc-reset", domains, false, now);
+    }
+
+    await expect(
+      limiter.checkNewOrderLimits("acc-reset", domains, false, now)
+    ).rejects.toThrowError(AcmeError);
+
+    await expect(
+      limiter.checkNewOrderLimits(
+        "acc-reset",
+        domains,
+        false,
+        now + CONFIG.RATE_LIMIT_DUPLICATE_WINDOW_SECONDS
+      )
     ).resolves.not.toThrow();
   });
 });

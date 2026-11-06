@@ -15,6 +15,7 @@ export interface IntermediateCaEntry {
 export interface SelectedIntermediateCa {
   ca: IntermediateCaEntry;
   certPem: string;
+  cert: x509.X509Certificate;
   privateKey: CryptoKey;
 }
 
@@ -161,7 +162,7 @@ export function validateIntermediateCaCertificate(
   certPem: string,
   now = new Date(),
   revokedSerials?: Set<string>
-): { eligible: boolean; reason?: string } {
+): { eligible: boolean; reason?: string; cert?: x509.X509Certificate } {
   try {
     const cert = new x509.X509Certificate(certPem);
 
@@ -239,7 +240,7 @@ export function validateIntermediateCaCertificate(
       }
     }
 
-    return { eligible: true };
+    return { eligible: true, cert };
   } catch (err) {
     return {
       eligible: false,
@@ -298,7 +299,9 @@ export async function selectIntermediateCa(
   }
 
   // Filter eligible CAs
-  const eligible: Array<IntermediateCaEntry & { certPem: string }> = [];
+  const eligible: Array<
+    IntermediateCaEntry & { certPem: string; cert: x509.X509Certificate }
+  > = [];
   const now = options?.now || new Date();
 
   for (const ca of candidates) {
@@ -325,7 +328,7 @@ export async function selectIntermediateCa(
 
     // 5. Check certificate eligibility
     const val = validateIntermediateCaCertificate(ca, certPem, now, options?.revokedSerials);
-    if (!val.eligible) {
+    if (!val.eligible || !val.cert) {
       continue;
     }
 
@@ -333,6 +336,7 @@ export async function selectIntermediateCa(
       ...ca,
       weight,
       certPem,
+      cert: val.cert,
     });
   }
 
@@ -343,7 +347,10 @@ export async function selectIntermediateCa(
   }
 
   // Weighted Random Selection using secure random generator
-  let chosen: (IntermediateCaEntry & { certPem: string });
+  let chosen: IntermediateCaEntry & {
+    certPem: string;
+    cert: x509.X509Certificate;
+  };
   if (eligible.length === 1) {
     chosen = eligible[0];
   } else {
@@ -372,6 +379,7 @@ export async function selectIntermediateCa(
   return {
     ca: chosen,
     certPem,
+    cert: chosen.cert,
     privateKey,
   };
 }

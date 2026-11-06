@@ -2,9 +2,7 @@ import {
   AccountRow,
   AuthorizationRow,
   CertificateRow,
-  NonceRow,
   OrderRow,
-  RateLimitRow,
 } from "./types";
 
 export class Database {
@@ -82,7 +80,8 @@ export class Database {
       `),
       this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_orders_account ON orders (account_id);`),
       this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_authorizations_order ON authorizations (order_id);`),
-      this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_certificates_cert_id ON certificates (cert_id);`),
+      // cert_id is UNIQUE, so SQLite already maintains an implicit index for it.
+      this.db.prepare(`DROP INDEX IF EXISTS idx_certificates_cert_id;`),
       this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_certificates_serial ON certificates (serial_number);`),
     ]);
 
@@ -309,16 +308,6 @@ export class Database {
       .first<CertificateRow>();
   }
 
-  async findMatchingCertificate(domains: string[]): Promise<CertificateRow | null> {
-    const sorted = JSON.stringify(domains.slice().sort());
-    return await this.db
-      .prepare(
-        "SELECT * FROM certificates WHERE san = ? AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1"
-      )
-      .bind(sorted)
-      .first<CertificateRow>();
-  }
-
   async markCertificateReplaced(certId: string, newCertId: string): Promise<void> {
     await this.db
       .prepare("UPDATE certificates SET replaced_by_cert_id = ? WHERE cert_id = ?")
@@ -346,30 +335,31 @@ export class Database {
     windowSeconds: number,
     now: number
   ): Promise<{ allowed: boolean; remaining: number }> {
-    const existing = await this.db
-      .prepare("SELECT * FROM rate_limits WHERE key = ?")
-      .bind(key)
-      .first<RateLimitRow>();
+    // Single atomic statement: reset the window, increment, or leave the
+    // counter at limit + 1 to mark a rejected attempt.
+    const row = await this.db
+      .prepare(
+        `INSERT INTO rate_limits (key, counter, window_start)
+         VALUES (?, 1, ?)
+         ON CONFLICT(key) DO UPDATE SET
+           counter = CASE
+             WHEN excluded.window_start - rate_limits.window_start >= ? THEN 1
+             WHEN rate_limits.counter < ? THEN rate_limits.counter + 1
+             ELSE MAX(rate_limits.counter, ? + 1)
+           END,
+           window_start = CASE
+             WHEN excluded.window_start - rate_limits.window_start >= ? THEN excluded.window_start
+             ELSE rate_limits.window_start
+           END
+         RETURNING counter`
+      )
+      .bind(key, now, windowSeconds, limit, limit, windowSeconds)
+      .first<{ counter: number }>();
 
-    if (!existing || now - existing.window_start >= windowSeconds) {
-      await this.db
-        .prepare(
-          "INSERT OR REPLACE INTO rate_limits (key, counter, window_start) VALUES (?, 1, ?)"
-        )
-        .bind(key, now)
-        .run();
-      return { allowed: true, remaining: limit - 1 };
-    }
-
-    if (existing.counter >= limit) {
-      return { allowed: false, remaining: 0 };
-    }
-
-    await this.db
-      .prepare("UPDATE rate_limits SET counter = counter + 1 WHERE key = ?")
-      .bind(key)
-      .run();
-
-    return { allowed: true, remaining: limit - (existing.counter + 1) };
+    const counter = row?.counter ?? 1;
+    return {
+      allowed: counter <= limit,
+      remaining: Math.max(0, limit - counter),
+    };
   }
 }
