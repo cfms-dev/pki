@@ -73,4 +73,25 @@ describe("Rate Limiting & ARI Renewal Exemption", () => {
       )
     ).resolves.not.toThrow();
   });
+
+  it("should count only failed challenge attempts toward the failed-validation limit", async () => {
+    const now = 1700000000;
+    const hostname = "example.com";
+
+    // Successful checks do not consume the failed-attempt budget.
+    for (let i = 0; i < CONFIG.RATE_LIMIT_FAILED_VALIDATIONS * 3; i++) {
+      await expect(
+        limiter.checkFailedValidationLimit("acc-success", hostname, now)
+      ).resolves.not.toThrow();
+    }
+
+    for (let i = 0; i < CONFIG.RATE_LIMIT_FAILED_VALIDATIONS; i++) {
+      await limiter.checkFailedValidationLimit("acc-failed", hostname, now);
+      await limiter.recordFailedValidation("acc-failed", hostname, now);
+    }
+
+    await expect(
+      limiter.checkFailedValidationLimit("acc-failed", hostname, now)
+    ).rejects.toThrowError(AcmeError);
+  });
 });

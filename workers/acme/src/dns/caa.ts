@@ -136,7 +136,8 @@ export function parseCaaRecord(raw: string): CaaRecord | null {
 function doesRecordAuthorize(
   record: CaaRecord,
   accountUri?: string,
-  expectedIssuerDomain: string = CAA_ISSUER_DOMAIN_NAME
+  expectedIssuerDomain: string = CAA_ISSUER_DOMAIN_NAME,
+  validationMethods: string[] = ["dns-01"]
 ): boolean {
   const normalizedIssuer = record.issuerDomain.toLowerCase();
   const targetIssuer = expectedIssuerDomain.toLowerCase();
@@ -146,19 +147,26 @@ function doesRecordAuthorize(
     return false;
   }
 
-  // RFC 8659 Section 4.3: accounturi parameter
-  if (record.parameters.accounturi && accountUri) {
-    if (record.parameters.accounturi !== accountUri) {
+  // RFC 8657 Section 3: accounturi parameter. If the property names an
+  // account, the CA must know which account is requesting issuance and it must
+  // match; an absent account URI cannot satisfy the restriction.
+  if (record.parameters.accounturi !== undefined) {
+    if (!accountUri || record.parameters.accounturi !== accountUri) {
       return false;
     }
   }
 
-  // RFC 8659 Section 4.4: validationmethods parameter
-  if (record.parameters.validationmethods) {
+  // RFC 8657 Section 4: validationmethods parameter. The record authorizes
+  // issuance when at least one method actually used for this identifier is
+  // listed. An explicitly empty list authorizes no method at all, so it must
+  // not be treated the same as an absent parameter.
+  if (record.parameters.validationmethods !== undefined) {
     const methods = record.parameters.validationmethods
       .split(",")
-      .map((m) => m.trim().toLowerCase());
-    if (!methods.includes("dns-01")) {
+      .map((m) => m.trim().toLowerCase())
+      .filter(Boolean);
+    const used = validationMethods.map((m) => m.toLowerCase());
+    if (methods.length === 0 || !methods.some((method) => used.includes(method))) {
       return false;
     }
   }
@@ -179,7 +187,8 @@ export function evaluateCaaRecords(
   records: CaaRecord[],
   isWildcard: boolean,
   accountUri?: string,
-  expectedIssuerDomain: string = CAA_ISSUER_DOMAIN_NAME
+  expectedIssuerDomain: string = CAA_ISSUER_DOMAIN_NAME,
+  validationMethods: string[] = ["dns-01"]
 ): CaaValidationResult {
   if (records.length === 0) {
     return { valid: true, recordsFound: [] };
@@ -205,7 +214,9 @@ export function evaluateCaaRecords(
     const issuewildRecords = records.filter((r) => r.tag === "issuewild");
     if (issuewildRecords.length > 0) {
       // issuewild takes precedence over issue for wildcard certificates
-      const authorized = issuewildRecords.some((r) => doesRecordAuthorize(r, accountUri, expectedIssuerDomain));
+      const authorized = issuewildRecords.some((r) =>
+        doesRecordAuthorize(r, accountUri, expectedIssuerDomain, validationMethods)
+      );
       if (!authorized) {
         return {
           valid: false,
@@ -219,7 +230,9 @@ export function evaluateCaaRecords(
     // If no issuewild tags are present, fall back to issue tags
     const issueRecords = records.filter((r) => r.tag === "issue");
     if (issueRecords.length > 0) {
-      const authorized = issueRecords.some((r) => doesRecordAuthorize(r, accountUri, expectedIssuerDomain));
+      const authorized = issueRecords.some((r) =>
+        doesRecordAuthorize(r, accountUri, expectedIssuerDomain, validationMethods)
+      );
       if (!authorized) {
         return {
           valid: false,
@@ -236,7 +249,9 @@ export function evaluateCaaRecords(
     // Non-wildcard domain: issuewild is ignored
     const issueRecords = records.filter((r) => r.tag === "issue");
     if (issueRecords.length > 0) {
-      const authorized = issueRecords.some((r) => doesRecordAuthorize(r, accountUri, expectedIssuerDomain));
+      const authorized = issueRecords.some((r) =>
+        doesRecordAuthorize(r, accountUri, expectedIssuerDomain, validationMethods)
+      );
       if (!authorized) {
         return {
           valid: false,
@@ -370,7 +385,8 @@ export async function validateCaa(
   domain: string,
   accountUri?: string,
   fetchImpl: typeof fetch = fetch,
-  expectedIssuerDomain: string = CAA_ISSUER_DOMAIN_NAME
+  expectedIssuerDomain: string = CAA_ISSUER_DOMAIN_NAME,
+  validationMethods: string[] = ["dns-01"]
 ): Promise<CaaValidationResult> {
   const isWildcard = domain.startsWith("*.");
   const cleanDomain = isWildcard ? domain.slice(2) : domain;
@@ -381,7 +397,13 @@ export async function validateCaa(
     return { valid: true };
   }
 
-  const result = evaluateCaaRecords(relevant.records, isWildcard, accountUri, expectedIssuerDomain);
+  const result = evaluateCaaRecords(
+    relevant.records,
+    isWildcard,
+    accountUri,
+    expectedIssuerDomain,
+    validationMethods
+  );
   return {
     ...result,
     relevantDomain: relevant.domain,
@@ -396,13 +418,21 @@ export async function validateCaaForOrder(
   domains: string[],
   accountUri: string,
   env?: { fetch?: typeof fetch; CAA_ISSUER_DOMAIN_NAME?: string; [key: string]: unknown },
-  fetchImpl?: typeof fetch
+  fetchImpl?: typeof fetch,
+  validationMethodsByDomain?: Map<string, string[]>
 ): Promise<void> {
   const fetcher = fetchImpl || (env?.fetch as typeof fetch) || fetch;
   const caaIssuer = getCaaIssuerDomainName(env as AcmeEnv | undefined);
 
   for (const domain of domains) {
-    const res = await validateCaa(domain, accountUri, fetcher, caaIssuer);
+    const methods = validationMethodsByDomain?.get(domain.toLowerCase());
+    const res = await validateCaa(
+      domain,
+      accountUri,
+      fetcher,
+      caaIssuer,
+      methods && methods.length > 0 ? methods : ["dns-01"]
+    );
     if (!res.valid) {
       throw AcmeError.caa(
         `CAA verification failed for domain '${domain}': ${res.error || "CAA records forbid issuance by " + caaIssuer}`

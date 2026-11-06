@@ -376,7 +376,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
       expect(res.error).toContain("Unrecognized critical CAA property tag 'unknowncriticalproperty'");
     });
 
-    it("should enforce RFC 8659 accounturi parameter check", () => {
+    it("should enforce RFC 8657 accounturi parameter check", () => {
       const records: CaaRecord[] = [
         {
           flags: 0,
@@ -394,9 +394,13 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
       // Mismatched account URI -> denied
       const resMismatched = evaluateCaaRecords(records, false, "https://acme.test/account/999");
       expect(resMismatched.valid).toBe(false);
+
+      // A restricted property cannot be satisfied without an account URI.
+      const resUnknown = evaluateCaaRecords(records, false);
+      expect(resUnknown.valid).toBe(false);
     });
 
-    it("should enforce RFC 8659 validationmethods parameter check", () => {
+    it("should enforce RFC 8657 validationmethods parameter check", () => {
       // Allows dns-01
       const recordsWithDns01: CaaRecord[] = [
         {
@@ -420,6 +424,22 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
         },
       ];
       expect(evaluateCaaRecords(recordsHttp01Only, false).valid).toBe(false);
+
+      // An explicitly empty list authorizes no validation method.
+      expect(
+        evaluateCaaRecords(
+          [
+            {
+              flags: 0,
+              tag: "issue",
+              value: "cfms-pki.crpteam.club; validationmethods=",
+              issuerDomain: "cfms-pki.crpteam.club",
+              parameters: { validationmethods: "" },
+            },
+          ],
+          false
+        ).valid
+      ).toBe(false);
     });
   });
 

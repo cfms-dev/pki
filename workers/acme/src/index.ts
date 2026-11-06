@@ -70,7 +70,12 @@ export default {
       // In RFC 8555 § 6.5.1, the server MUST include Replay-Nonce on POST responses
       // and Link rel="index" to the ACME directory.
       const headers = new Headers(response.headers);
-      headers.set("Link", `<${baseUrl}/directory>;rel="index"`);
+      const indexLink = `<${baseUrl}/directory>;rel="index"`;
+      const existingLink = headers.get("Link");
+      headers.set(
+        "Link",
+        existingLink ? `${existingLink}, ${indexLink}` : indexLink
+      );
       headers.set("Access-Control-Allow-Origin", "*");
       headers.set(
         "Access-Control-Expose-Headers",
@@ -180,7 +185,15 @@ async function routeRequest(
   const challengeMatch = path.match(/^\/challenge\/([a-zA-Z0-9_-]+)$/);
   if (challengeMatch) {
     if (request.method !== "POST") return methodNotAllowed();
-    return await handleChallenge(request, database, baseUrl, challengeMatch[1]);
+    const challengeFetch =
+      typeof env.fetch === "function" ? (env.fetch as typeof fetch) : fetch;
+    return await handleChallenge(
+      request,
+      database,
+      baseUrl,
+      challengeMatch[1],
+      challengeFetch
+    );
   }
 
   // Certificate Download

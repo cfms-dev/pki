@@ -2,6 +2,7 @@ import {
   AccountRow,
   AuthorizationRow,
   CertificateRow,
+  ChallengeRow,
   OrderRow,
 } from "./types";
 
@@ -54,6 +55,21 @@ export class Database {
         );
       `),
       this.db.prepare(`
+        CREATE TABLE IF NOT EXISTS challenges (
+            id TEXT PRIMARY KEY,
+            authorization_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            token TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error TEXT,
+            validated_at INTEGER,
+            processing_started_at INTEGER,
+            validation_generation INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            UNIQUE (authorization_id, type)
+        );
+      `),
+      this.db.prepare(`
         CREATE TABLE IF NOT EXISTS certificates (
             id TEXT PRIMARY KEY,
             cert_id TEXT UNIQUE NOT NULL,
@@ -80,6 +96,7 @@ export class Database {
       `),
       this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_orders_account ON orders (account_id);`),
       this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_authorizations_order ON authorizations (order_id);`),
+      this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_challenges_authorization ON challenges (authorization_id);`),
       // cert_id is UNIQUE, so SQLite already maintains an implicit index for it.
       this.db.prepare(`DROP INDEX IF EXISTS idx_certificates_cert_id;`),
       this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_certificates_serial ON certificates (serial_number);`),
@@ -87,6 +104,20 @@ export class Database {
 
     try {
       await this.db.prepare("ALTER TABLE accounts ADD COLUMN terms_of_service TEXT;").run();
+    } catch {
+      // Column may already exist
+    }
+
+    // Upgrade a `challenges` table that was created before validation
+    // generations were introduced. Fresh databases already have the column
+    // from the CREATE TABLE statement above, in which case this ALTER fails
+    // harmlessly with "duplicate column name".
+    try {
+      await this.db
+        .prepare(
+          "ALTER TABLE challenges ADD COLUMN validation_generation INTEGER NOT NULL DEFAULT 0;"
+        )
+        .run();
     } catch {
       // Column may already exist
     }
@@ -260,6 +291,278 @@ export class Database {
       .run();
   }
 
+  async updateAuthorizationStatusIfPending(
+    id: string,
+    status: AuthorizationRow["status"]
+  ): Promise<boolean> {
+    const res = await this.db
+      .prepare("UPDATE authorizations SET status = ? WHERE id = ? AND status = 'pending'")
+      .bind(status, id)
+      .run();
+    return (res.meta?.changes ?? 0) > 0;
+  }
+
+  // --- Challenge Operations ---
+  async saveChallenge(challenge: ChallengeRow): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO challenges (id, authorization_id, type, token, status, error,
+          validated_at, processing_started_at, validation_generation, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        challenge.id,
+        challenge.authorization_id,
+        challenge.type,
+        challenge.token,
+        challenge.status,
+        challenge.error,
+        challenge.validated_at,
+        challenge.processing_started_at,
+        challenge.validation_generation,
+        challenge.created_at
+      )
+      .run();
+  }
+
+  /** Inserts a challenge unless the (authorization, type) pair already exists. */
+  async saveChallengeIfAbsent(challenge: ChallengeRow): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT OR IGNORE INTO challenges (id, authorization_id, type, token, status, error,
+          validated_at, processing_started_at, validation_generation, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        challenge.id,
+        challenge.authorization_id,
+        challenge.type,
+        challenge.token,
+        challenge.status,
+        challenge.error,
+        challenge.validated_at,
+        challenge.processing_started_at,
+        challenge.validation_generation,
+        challenge.created_at
+      )
+      .run();
+  }
+
+  async getChallengeById(id: string): Promise<ChallengeRow | null> {
+    return await this.db
+      .prepare("SELECT * FROM challenges WHERE id = ?")
+      .bind(id)
+      .first<ChallengeRow>();
+  }
+
+  async getChallengesByAuthorizationId(authorizationId: string): Promise<ChallengeRow[]> {
+    const res = await this.db
+      .prepare(
+        `SELECT * FROM challenges
+         WHERE authorization_id = ?
+         ORDER BY CASE type WHEN 'dns-01' THEN 0 ELSE 1 END, created_at, id`
+      )
+      .bind(authorizationId)
+      .all<ChallengeRow>();
+    return res.results || [];
+  }
+
+  /**
+   * Atomically moves a pending challenge into `processing` and increments its
+   * validation generation. A stale `processing` row (for example after an
+   * isolate crash) can be reclaimed after `staleBefore`, ensuring validations
+   * cannot remain stuck forever. The returned generation must be passed to the
+   * completion methods; only the current generation may change the row.
+   */
+  async claimChallengeForValidation(
+    id: string,
+    now: number,
+    staleBefore: number
+  ): Promise<number | null> {
+    const row = await this.db
+      .prepare(
+        `UPDATE challenges
+         SET status = 'processing',
+             processing_started_at = ?,
+             error = NULL,
+             validation_generation = COALESCE(validation_generation, 0) + 1
+         WHERE id = ?
+           AND (status = 'pending'
+                OR (status = 'processing'
+                    AND (processing_started_at IS NULL OR processing_started_at < ?)))
+         RETURNING validation_generation`
+      )
+      .bind(now, id, staleBefore)
+      .first<{ validation_generation: number }>();
+    return row?.validation_generation ?? null;
+  }
+
+  /**
+   * Records a successful validation and advances the authorization/order state.
+   * Returns false when another request already completed this challenge or when
+   * this attempt's claim was reclaimed by a newer generation.
+   */
+  async completeChallengeValidationSuccess(
+    challengeId: string,
+    validationGeneration: number,
+    authorizationId: string,
+    orderId: string,
+    validatedAt: number
+  ): Promise<boolean> {
+    const res = await this.db
+      .prepare(
+        `UPDATE challenges
+         SET status = 'valid', error = NULL, validated_at = ?, processing_started_at = NULL
+         WHERE id = ? AND status = 'processing' AND validation_generation = ?
+           AND EXISTS (
+             SELECT 1 FROM authorizations
+             WHERE id = ? AND status IN ('pending', 'valid')
+           )`
+      )
+      .bind(validatedAt, challengeId, validationGeneration, authorizationId)
+      .run();
+    if ((res.meta?.changes ?? 0) === 0) {
+      return false;
+    }
+
+    await this.updateAuthorizationStatusIfPending(authorizationId, "valid");
+    await this.markOrderReadyIfAllAuthorizationsValid(orderId);
+    return true;
+  }
+
+  /**
+   * Records a failed validation and invalidates the authorization, its other
+   * pending challenges, and any open order so no certificate can be issued.
+   * Returns false when the attempt is no longer the current generation.
+   */
+  async completeChallengeValidationFailure(
+    challengeId: string,
+    validationGeneration: number,
+    authorizationId: string,
+    orderId: string,
+    errorJson: string
+  ): Promise<boolean> {
+    const res = await this.db
+      .prepare(
+        `UPDATE challenges
+         SET status = 'invalid', error = ?, validated_at = NULL, processing_started_at = NULL
+         WHERE id = ? AND status = 'processing' AND validation_generation = ?`
+      )
+      .bind(errorJson, challengeId, validationGeneration)
+      .run();
+    if ((res.meta?.changes ?? 0) === 0) {
+      return false;
+    }
+
+    // Another challenge may already have made the authorization valid. In that
+    // case the failed challenge is recorded but must not invalidate a valid
+    // authorization or order.
+    const authzInvalidated = await this.updateAuthorizationStatusIfPending(
+      authorizationId,
+      "invalid"
+    );
+    if (authzInvalidated) {
+      await this.db
+        .prepare(
+          `UPDATE challenges
+           SET status = 'invalid', error = ?, processing_started_at = NULL
+           WHERE authorization_id = ? AND id <> ? AND status IN ('pending', 'processing')`
+        )
+        .bind(errorJson, authorizationId, challengeId)
+        .run();
+      await this.invalidateOpenOrder(orderId);
+    }
+    return true;
+  }
+
+  async invalidatePendingChallengesForAuthorization(
+    authorizationId: string,
+    errorJson: string
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE challenges
+         SET status = 'invalid', error = ?, processing_started_at = NULL
+         WHERE authorization_id = ? AND status IN ('pending', 'processing')`
+      )
+      .bind(errorJson, authorizationId)
+      .run();
+  }
+
+  async invalidateChallenge(challengeId: string, errorJson: string): Promise<boolean> {
+    const res = await this.db
+      .prepare(
+        `UPDATE challenges
+         SET status = 'invalid', error = ?, processing_started_at = NULL
+         WHERE id = ? AND status IN ('pending', 'processing')`
+      )
+      .bind(errorJson, challengeId)
+      .run();
+    return (res.meta?.changes ?? 0) > 0;
+  }
+
+  async markOrderReadyIfAllAuthorizationsValid(orderId: string): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE orders
+         SET status = 'ready'
+         WHERE id = ? AND status = 'pending'
+           AND EXISTS (SELECT 1 FROM authorizations WHERE order_id = ?)
+           AND NOT EXISTS (
+             SELECT 1 FROM authorizations WHERE order_id = ? AND status <> 'valid'
+           )`
+      )
+      .bind(orderId, orderId, orderId)
+      .run();
+  }
+
+  async invalidateOpenOrder(orderId: string): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE orders SET status = 'invalid'
+         WHERE id = ? AND status IN ('pending', 'ready')`
+      )
+      .bind(orderId)
+      .run();
+  }
+
+  /**
+   * Atomically claims a ready order for issuance so concurrent finalize
+   * requests cannot both sign a certificate.
+   */
+  async claimOrderForFinalize(orderId: string): Promise<boolean> {
+    const res = await this.db
+      .prepare("UPDATE orders SET status = 'processing' WHERE id = ? AND status = 'ready'")
+      .bind(orderId)
+      .run();
+    return (res.meta?.changes ?? 0) > 0;
+  }
+
+  async releaseOrderFromProcessing(orderId: string): Promise<void> {
+    await this.db
+      .prepare(
+        "UPDATE orders SET status = 'ready' WHERE id = ? AND status = 'processing' AND certificate_id IS NULL"
+      )
+      .bind(orderId)
+      .run();
+  }
+
+  /** Returns the challenge types that successfully validated each order identifier. */
+  async getValidChallengeTypesByOrderId(
+    orderId: string
+  ): Promise<Array<{ identifier_value: string; type: string }>> {
+    const res = await this.db
+      .prepare(
+        `SELECT a.identifier_value AS identifier_value, c.type AS type
+         FROM authorizations a
+         JOIN challenges c ON c.authorization_id = a.id
+         WHERE a.order_id = ? AND a.status = 'valid' AND c.status = 'valid'`
+      )
+      .bind(orderId)
+      .all<{ identifier_value: string; type: string }>();
+    return res.results || [];
+  }
+
   // --- Certificate Operations ---
   async saveCertificate(cert: CertificateRow): Promise<void> {
     await this.db
@@ -329,6 +632,20 @@ export class Database {
   }
 
   // --- Rate Limit Operations ---
+  async getRateLimitCounter(
+    key: string,
+    windowSeconds: number,
+    now: number
+  ): Promise<number> {
+    const row = await this.db
+      .prepare("SELECT counter, window_start FROM rate_limits WHERE key = ?")
+      .bind(key)
+      .first<{ counter: number; window_start: number }>();
+    if (!row) return 0;
+    if (now - row.window_start >= windowSeconds) return 0;
+    return row.counter;
+  }
+
   async checkAndIncrementRateLimit(
     key: string,
     limit: number,

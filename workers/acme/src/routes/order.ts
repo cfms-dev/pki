@@ -9,6 +9,9 @@ import { AuthorizationRow, OrderRow } from "../db/types";
 import { AcmeError } from "../errors";
 import { checkAriRenewalEligibility } from "../ari/window";
 import { RateLimiter } from "../ratelimit/limiter";
+import { buildChallengesForAuthorization } from "../acme/challenges";
+import { isValidDnsIdentifier } from "../acme/identifiers";
+import { syncOrderState } from "../acme/state";
 
 interface NewOrderPayload {
   identifiers: Array<{ type: string; value: string }>;
@@ -16,9 +19,6 @@ interface NewOrderPayload {
   notAfter?: string;
   replaces?: string; // RFC 9773 Predecessor certID
 }
-
-const DOMAIN_REGEX =
-  /^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
 
 export async function handleNewOrder(
   request: Request,
@@ -47,13 +47,30 @@ export async function handleNewOrder(
 
   const domainList: string[] = [];
   for (const ident of payload.identifiers) {
-    if (ident.type !== "dns") {
-      throw AcmeError.rejectedIdentifier(
-        `Unsupported identifier type '${ident.type}'. Only 'dns' is supported.`
+    if (
+      !ident ||
+      typeof ident !== "object" ||
+      typeof ident.type !== "string" ||
+      typeof ident.value !== "string"
+    ) {
+      throw AcmeError.malformed(
+        "Each identifier must include a string 'type' and 'value'"
       );
     }
+
+    if (ident.type !== "dns") {
+      // RFC 8555 § 6.7 unsupportedIdentifier. This server intentionally does
+      // not implement RFC 8738 IP validation: Workers fetch() cannot target IP
+      // literals and the documented TCP-socket path is not a supported HTTP
+      // validation transport. Rejecting the identifier prevents orders that
+      // could never be validated from being created.
+      throw AcmeError.unsupportedIdentifier(
+        `Identifier type '${ident.type}' is not supported. Only 'dns' identifiers can be validated by this ACME server.`
+      );
+    }
+
     const domain = ident.value.trim().toLowerCase();
-    if (!DOMAIN_REGEX.test(domain)) {
+    if (!isValidDnsIdentifier(domain)) {
       throw AcmeError.rejectedIdentifier(`Invalid domain syntax: '${ident.value}'`);
     }
     domainList.push(domain);
@@ -107,7 +124,8 @@ export async function handleNewOrder(
   await database.saveOrder(order);
 
   // Per user requirement: "续期证书时，必须重新验证所有权。"
-  // All authorizations are issued fresh in 'pending' status, requiring DNS-01 re-verification.
+  // All authorizations are issued fresh in 'pending' status, requiring
+  // re-verification through dns-01 or http-01.
   const authzIds: string[] = [];
   const uniqueDomains = Array.from(new Set(domainList));
 
@@ -124,6 +142,11 @@ export async function handleNewOrder(
       created_at: now,
     };
     await database.saveAuthorization(authz);
+
+    for (const challenge of buildChallengesForAuthorization(authz)) {
+      await database.saveChallenge(challenge);
+    }
+
     authzIds.push(authzId);
   }
 
@@ -141,7 +164,7 @@ export async function handleGetOrder(
     throw AcmeError.unauthorized();
   }
 
-  const order = await database.getOrderById(orderId);
+  let order = await database.getOrderById(orderId);
   if (!order) {
     throw AcmeError.notFound("Order not found");
   }
@@ -150,24 +173,13 @@ export async function handleGetOrder(
     throw AcmeError.unauthorized("Order does not belong to account");
   }
 
-  const authzs = await database.getAuthorizationsByOrderId(orderId);
-
-  // If currently pending, verify if all authorizations have transitioned to valid
-  if (order.status === "pending" && authzs.length > 0) {
-    const allValid = authzs.every((a) => a.status === "valid");
-    const anyInvalid = authzs.some((a) => a.status === "invalid");
-    if (anyInvalid) {
-      await database.updateOrderStatus(orderId, "invalid");
-      order.status = "invalid";
-    } else if (allValid) {
-      await database.updateOrderStatus(orderId, "ready");
-      order.status = "ready";
-    }
-  }
+  const now = Math.floor(Date.now() / 1000);
+  const synced = await syncOrderState(database, order, now);
+  order = synced.order;
 
   return formatOrderResponse(
     order,
-    authzs.map((a) => a.id),
+    synced.authorizations.map((a) => a.id),
     baseUrl,
     200
   );
@@ -185,7 +197,7 @@ export async function handleFinalizeOrder(
     throw AcmeError.unauthorized();
   }
 
-  const order = await database.getOrderById(orderId);
+  let order = await database.getOrderById(orderId);
   if (!order) {
     throw AcmeError.notFound("Order not found");
   }
@@ -194,18 +206,50 @@ export async function handleFinalizeOrder(
     throw AcmeError.unauthorized("Order does not belong to account");
   }
 
-  const authzs = await database.getAuthorizationsByOrderId(orderId);
-  const allValid = authzs.length > 0 && authzs.every((a) => a.status === "valid");
+  const now = Math.floor(Date.now() / 1000);
+  const synced = await syncOrderState(database, order, now);
+  order = synced.order;
+  const authzs = synced.authorizations;
 
-  if (!allValid && order.status !== "ready") {
-    throw AcmeError.orderNotReady("All authorizations must be valid before finalizing");
+  // Idempotent finalize of an already-issued order.
+  if (order.status === "valid" && order.certificate_id) {
+    return formatOrderResponse(
+      order,
+      authzs.map((authz) => authz.id),
+      baseUrl,
+      200
+    );
+  }
+
+  if (order.status !== "ready") {
+    throw AcmeError.orderNotReady(
+      `Order is '${order.status}'; only a ready order can be finalized`
+    );
+  }
+
+  if (order.expires_at <= now) {
+    await database.updateOrderStatus(orderId, "invalid");
+    order.status = "invalid";
+    throw AcmeError.orderNotReady("Order has expired");
+  }
+
+  const allValid =
+    authzs.length > 0 &&
+    authzs.every(
+      (authz) => authz.status === "valid" && authz.expires_at > now
+    );
+  if (!allValid) {
+    throw AcmeError.orderNotReady(
+      "All authorizations must be valid and unexpired before finalizing"
+    );
   }
 
   if (!verified.payload.csr) {
     throw AcmeError.badCSR("Finalize payload must contain 'csr'");
   }
 
-  // Parse & verify CSR
+  // Parse & verify CSR before claiming the order so malformed requests do not
+  // move the order into `processing`.
   const parsedCsr = await parseAndVerifyCsr(verified.payload.csr);
   const orderDomains: string[] = JSON.parse(order.identifiers);
 
@@ -219,58 +263,137 @@ export async function handleFinalizeOrder(
     );
   }
 
-  // Pre-issuance CAA Verification (RFC 8659)
-  // All intermediate CAs share the unified CAA Identity: CAA_ISSUER_DOMAIN_NAME ("cfms-pki.crpteam.club")
-  const accountUri = `${baseUrl}/account/${verified.account.id}`;
-  await validateCaaForOrder(orderDomains, accountUri, env);
-
-  // After CAA validation and other pre-issuance checks pass,
-  // select an Intermediate CA from the eligible pool
-  const selectedCa = await selectIntermediateCa(env);
-
-  // Issue Certificate with selected intermediate CA
-  const issued = await issueCertificateFromCsr(
-    parsedCsr.csr,
-    orderDomains,
-    env,
-    undefined,
-    selectedCa
-  );
-
-  const certIdInDb = crypto.randomUUID();
-  await database.saveCertificate({
-    id: certIdInDb,
-    cert_id: issued.certId,
-    serial_number: issued.serialNumber,
-    aki: issued.aki,
-    subject: issued.subject,
-    san: JSON.stringify(issued.san),
-    pem: issued.chainPem,
-    not_before: issued.notBefore,
-    not_after: issued.notAfter,
-    account_id: order.account_id,
-    created_at: Math.floor(Date.now() / 1000),
-    revoked_at: null,
-    revocation_reason: null,
-    replaced_by_cert_id: null,
-  });
-
-  // If this was an ARI renewal, link replacement on predecessor cert
-  if (order.is_ari_renewal && order.replaces_cert_id) {
-    await database.markCertificateReplaced(order.replaces_cert_id, issued.certId);
+  // Serialize finalization: only one request may move a ready order to
+  // processing and issue a certificate.
+  const claimed = await database.claimOrderForFinalize(orderId);
+  if (!claimed) {
+    const latest = await database.getOrderById(orderId);
+    if (latest?.status === "valid" && latest.certificate_id) {
+      return formatOrderResponse(
+        latest,
+        authzs.map((authz) => authz.id),
+        baseUrl,
+        200
+      );
+    }
+    throw AcmeError.orderNotReady("Order is already being finalized");
   }
+  order.status = "processing";
 
-  // Update order status to valid
-  await database.updateOrderStatus(orderId, "valid", certIdInDb);
-  order.status = "valid";
-  order.certificate_id = certIdInDb;
+  try {
+    const nowBeforeIssue = Math.floor(Date.now() / 1000);
+    const authzsBeforeIssue = await database.getAuthorizationsByOrderId(orderId);
+    if (
+      authzsBeforeIssue.length === 0 ||
+      authzsBeforeIssue.some(
+        (authz) => authz.status !== "valid" || authz.expires_at <= nowBeforeIssue
+      )
+    ) {
+      await database.updateOrderStatus(orderId, "invalid");
+      throw AcmeError.orderNotReady(
+        "All authorizations must be valid and unexpired before issuance"
+      );
+    }
 
-  return formatOrderResponse(
-    order,
-    authzs.map((a) => a.id),
-    baseUrl,
-    200
-  );
+    // Pre-issuance CAA Verification (RFC 8659). Pass the validation methods
+    // actually used so a CAA `validationmethods` property is evaluated against
+    // the correct method rather than assuming dns-01.
+    const accountUri = `${baseUrl}/account/${verified.account.id}`;
+    const validationRows = await database.getValidChallengeTypesByOrderId(orderId);
+    const methodsByDomain = new Map<string, string[]>();
+    for (const row of validationRows) {
+      const domain = row.identifier_value.toLowerCase();
+      const methods = methodsByDomain.get(domain) ?? [];
+      if (!methods.includes(row.type)) {
+        methods.push(row.type);
+      }
+      methodsByDomain.set(domain, methods);
+    }
+    await validateCaaForOrder(
+      orderDomains,
+      accountUri,
+      env,
+      undefined,
+      methodsByDomain
+    );
+
+    // After CAA validation and other pre-issuance checks pass,
+    // select an Intermediate CA from the eligible pool
+    const selectedCa = await selectIntermediateCa(env);
+
+    // Issue Certificate with selected intermediate CA
+    const issued = await issueCertificateFromCsr(
+      parsedCsr.csr,
+      orderDomains,
+      env,
+      undefined,
+      selectedCa
+    );
+
+    // Re-check authorization validity and order state immediately before
+    // persisting the certificate. This closes the window between the first
+    // check and a slow CAA lookup/issuance.
+    const finalCheckTime = Math.floor(Date.now() / 1000);
+    const [authzsBeforePersist, orderBeforePersist] = await Promise.all([
+      database.getAuthorizationsByOrderId(orderId),
+      database.getOrderById(orderId),
+    ]);
+    if (
+      !orderBeforePersist ||
+      orderBeforePersist.status !== "processing" ||
+      orderBeforePersist.expires_at <= finalCheckTime ||
+      authzsBeforePersist.length === 0 ||
+      authzsBeforePersist.some(
+        (authz) =>
+          authz.status !== "valid" || authz.expires_at <= finalCheckTime
+      )
+    ) {
+      await database.updateOrderStatus(orderId, "invalid");
+      throw AcmeError.orderNotReady(
+        "Order or authorization expired before the certificate could be issued"
+      );
+    }
+
+    const certIdInDb = crypto.randomUUID();
+    await database.saveCertificate({
+      id: certIdInDb,
+      cert_id: issued.certId,
+      serial_number: issued.serialNumber,
+      aki: issued.aki,
+      subject: issued.subject,
+      san: JSON.stringify(issued.san),
+      pem: issued.chainPem,
+      not_before: issued.notBefore,
+      not_after: issued.notAfter,
+      account_id: order.account_id,
+      created_at: Math.floor(Date.now() / 1000),
+      revoked_at: null,
+      revocation_reason: null,
+      replaced_by_cert_id: null,
+    });
+
+    // If this was an ARI renewal, link replacement on predecessor cert
+    if (order.is_ari_renewal && order.replaces_cert_id) {
+      await database.markCertificateReplaced(order.replaces_cert_id, issued.certId);
+    }
+
+    // Update order status to valid
+    await database.updateOrderStatus(orderId, "valid", certIdInDb);
+    order.status = "valid";
+    order.certificate_id = certIdInDb;
+
+    return formatOrderResponse(
+      order,
+      authzs.map((authz) => authz.id),
+      baseUrl,
+      200
+    );
+  } catch (err) {
+    // Issuance did not complete. Return the order to `ready` (unless it was
+    // deliberately marked invalid above) so the client can retry.
+    await database.releaseOrderFromProcessing(orderId);
+    throw err;
+  }
 }
 
 function formatOrderResponse(

@@ -115,6 +115,12 @@ export class AcmeError extends Error {
     return new AcmeError("rejectedIdentifier", detail, 400);
   }
 
+  static unsupportedIdentifier(
+    detail = "The requested identifier type is not supported"
+  ): AcmeError {
+    return new AcmeError("unsupportedIdentifier", detail, 400);
+  }
+
   static caa(detail = "Certification Authority Authorization (CAA) records forbid the CA from issuing"): AcmeError {
     return new AcmeError("caa", detail, 403);
   }

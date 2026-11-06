@@ -36,6 +36,104 @@ describe("X.509 Certificate Issuance & CSR Handling", () => {
     expect(parsed.publicKey).toBeDefined();
   });
 
+  it("rejects a CSR that requests a non-DNS SAN such as an IP address", async () => {
+    const clientKeys = (await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"]
+    )) as CryptoKeyPair;
+
+    const csr = await x509.Pkcs10CertificateRequestGenerator.create({
+      name: "CN=example.com",
+      keys: clientKeys,
+      signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+      extensions: [
+        new x509.SubjectAlternativeNameExtension([
+          { type: "dns", value: "example.com" },
+          { type: "ip", value: "192.0.2.1" },
+        ]),
+      ],
+    });
+
+    await expect(parseAndVerifyCsr(base64UrlEncode(csr.rawData))).rejects.toMatchObject({
+      type: "urn:ietf:params:acme:error:badCSR",
+    });
+  });
+
+  it("accepts a SAN-only CSR without a subject commonName", async () => {
+    const clientKeys = (await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"]
+    )) as CryptoKeyPair;
+    const csr = await x509.Pkcs10CertificateRequestGenerator.create({
+      keys: clientKeys,
+      signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+      extensions: [
+        new x509.SubjectAlternativeNameExtension([
+          { type: "dns", value: "example.com" },
+        ]),
+      ],
+    });
+
+    const parsed = await parseAndVerifyCsr(base64UrlEncode(csr.rawData));
+    expect(parsed.domains).toEqual(["example.com"]);
+  });
+
+  it("includes a valid DNS commonName in the requested identifier set", async () => {
+    const clientKeys = (await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"]
+    )) as CryptoKeyPair;
+    const csr = await x509.Pkcs10CertificateRequestGenerator.create({
+      name: "CN=evil.example.com",
+      keys: clientKeys,
+      signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+      extensions: [
+        new x509.SubjectAlternativeNameExtension([
+          { type: "dns", value: "example.com" },
+        ]),
+      ],
+    });
+
+    const parsed = await parseAndVerifyCsr(base64UrlEncode(csr.rawData));
+    expect(parsed.domains.sort()).toEqual(["evil.example.com", "example.com"]);
+  });
+
+  it("accepts a CN-only DNS identifier and ignores a descriptive CN when SANs exist", async () => {
+    const cnKeys = (await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"]
+    )) as CryptoKeyPair;
+    const cnOnly = await x509.Pkcs10CertificateRequestGenerator.create({
+      name: "CN=example.com",
+      keys: cnKeys,
+      signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+    });
+    const parsedCn = await parseAndVerifyCsr(base64UrlEncode(cnOnly.rawData));
+    expect(parsedCn.domains).toEqual(["example.com"]);
+
+    const sanKeys = (await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"]
+    )) as CryptoKeyPair;
+    const descriptiveCn = await x509.Pkcs10CertificateRequestGenerator.create({
+      name: "CN=ACME Client",
+      keys: sanKeys,
+      signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+      extensions: [
+        new x509.SubjectAlternativeNameExtension([
+          { type: "dns", value: "example.com" },
+        ]),
+      ],
+    });
+    const parsedSan = await parseAndVerifyCsr(base64UrlEncode(descriptiveCn.rawData));
+    expect(parsedSan.domains).toEqual(["example.com"]);
+  });
+
   it("should issue a 90-day leaf certificate signed by intermediate CA", async () => {
     // 1. Generate an Intermediate CA key pair for testing
     const caKeys = (await crypto.subtle.generateKey(

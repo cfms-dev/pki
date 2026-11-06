@@ -2,6 +2,7 @@ import "reflect-metadata";
 import * as x509 from "@peculiar/x509";
 import { AcmeEnv, CONFIG } from "../config";
 import { AcmeError } from "../errors";
+import { isValidDnsIdentifier } from "../acme/identifiers";
 import { base64UrlDecode } from "./nonce";
 import { bytesToHex, computeCertId } from "../ari/cert-id";
 import {
@@ -55,36 +56,49 @@ export async function parseAndVerifyCsr(csrBase64Url: string): Promise<ParsedCsr
     throw AcmeError.badCSR("CSR signature verification failed");
   }
 
-  // Extract domains from SAN extension or CommonName
+  // Extract identifiers from the subjectAltName extension. RFC 8555 § 7.4
+  // requires the CSR to request exactly the order's identifiers, and this
+  // server only supports "dns", so any other SAN type (notably "ip") is an
+  // unauthorized identifier and must be rejected rather than ignored.
   const domains: string[] = [];
   for (const ext of csr.extensions) {
-    if (ext.type === "2.5.29.17") {
-      const sanExt = new x509.SubjectAlternativeNameExtension(ext.rawData);
-      if (sanExt.names && Array.isArray(sanExt.names.items)) {
-        for (const item of sanExt.names.items) {
-          if (item.type === "dns" && item.value) {
-            domains.push(item.value.toLowerCase());
-          }
-        }
+    if (ext.type !== "2.5.29.17") continue;
+
+    const sanExt = new x509.SubjectAlternativeNameExtension(ext.rawData);
+    for (const item of sanExt.names.items) {
+      if (item.type !== "dns") {
+        throw AcmeError.badCSR(
+          `CSR subjectAltName contains an unsupported identifier type '${item.type}'; only DNS identifiers are supported`
+        );
       }
+      const value = item.value?.trim().toLowerCase();
+      if (!value) {
+        throw AcmeError.badCSR("CSR subjectAltName contains an empty DNS identifier");
+      }
+      domains.push(value);
     }
   }
 
-  if (domains.length === 0) {
-    // Check CN in subject
-    const cnMatch = csr.subject.match(/CN=([^,]+)/i);
-    if (cnMatch && cnMatch[1]) {
-      domains.push(cnMatch[1].trim().toLowerCase());
+  // RFC 8555 § 7.4 allows DNS identifiers to be carried in the subject
+  // commonName instead of (or in addition to) the SAN extension. Include a
+  // commonName only when it is a syntactically valid DNS identifier, so a
+  // descriptive CN does not become a phantom identifier. If it is a valid DNS
+  // name, it is part of the requested set and is checked against the order.
+  for (const cn of csr.subjectName.getField("CN")) {
+    const value = cn.trim().toLowerCase();
+    if (isValidDnsIdentifier(value)) {
+      domains.push(value);
     }
   }
 
-  if (domains.length === 0) {
+  const uniqueDomains = Array.from(new Set(domains));
+  if (uniqueDomains.length === 0) {
     throw AcmeError.badCSR("CSR contains no DNS Subject Alternative Names or Common Name");
   }
 
   return {
     csr,
-    domains,
+    domains: uniqueDomains,
     publicKey: await csr.publicKey.export(),
   };
 }
@@ -141,7 +155,9 @@ export async function issueCertificateFromCsr(
   const akiExt = await x509.AuthorityKeyIdentifierExtension.create(caCert.publicKey);
   const skiExt = await x509.SubjectKeyIdentifierExtension.create(csr.publicKey);
 
-  // SAN entries
+  // SAN entries are built exclusively from the already-authorized order
+  // identifiers. CSR-supplied names are only used for the finalize equality
+  // check in routes/order.ts; they are never copied into the certificate.
   const sanNames = authorizedDomains.map((d) => ({ type: "dns" as const, value: d }));
 
   const extensions: x509.Extension[] = [

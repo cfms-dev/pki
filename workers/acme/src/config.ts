@@ -124,6 +124,13 @@ export const CONFIG = {
   AUTHZ_EXPIRATION_SECONDS: 86400 * 3, // 3 days
   ARI_RETRY_AFTER_SECONDS: 21600,      // 6 hours
 
+  // HTTP-01 validation (RFC 8555 § 8.3)
+  HTTP01_MAX_REDIRECTS: 5,
+  HTTP01_REQUEST_TIMEOUT_MS: 10000,
+  HTTP01_TOTAL_TIMEOUT_MS: 20000,
+  HTTP01_MAX_BODY_BYTES: 8192,
+  CHALLENGE_PROCESSING_STALE_SECONDS: 60, // allow recovery from an interrupted validation
+
   // Rate Limits
   RATE_LIMIT_CERTS_PER_DOMAIN: 50,       // 50 certs per registered domain per 7 days
   RATE_LIMIT_DOMAIN_WINDOW_SECONDS: 7 * 86400,

@@ -33,9 +33,23 @@ CREATE TABLE IF NOT EXISTS authorizations (
     order_id TEXT NOT NULL,
     identifier_value TEXT NOT NULL,
     status TEXT NOT NULL, -- 'pending', 'valid', 'invalid'
-    token TEXT NOT NULL,
+    token TEXT NOT NULL, -- legacy dns-01 token; mirrored into challenges.token
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS challenges (
+    id TEXT PRIMARY KEY,
+    authorization_id TEXT NOT NULL,
+    type TEXT NOT NULL, -- 'dns-01', 'http-01'
+    token TEXT NOT NULL,
+    status TEXT NOT NULL, -- 'pending', 'processing', 'valid', 'invalid'
+    error TEXT, -- JSON-encoded ACME problem document
+    validated_at INTEGER,
+    processing_started_at INTEGER,
+    validation_generation INTEGER NOT NULL DEFAULT 0, -- fences stale processing attempts
+    created_at INTEGER NOT NULL,
+    UNIQUE (authorization_id, type)
 );
 
 CREATE TABLE IF NOT EXISTS certificates (
@@ -63,5 +77,6 @@ CREATE TABLE IF NOT EXISTS rate_limits (
 
 CREATE INDEX IF NOT EXISTS idx_orders_account ON orders (account_id);
 CREATE INDEX IF NOT EXISTS idx_authorizations_order ON authorizations (order_id);
+CREATE INDEX IF NOT EXISTS idx_challenges_authorization ON challenges (authorization_id);
 CREATE INDEX IF NOT EXISTS idx_certificates_cert_id ON certificates (cert_id);
 CREATE INDEX IF NOT EXISTS idx_certificates_serial ON certificates (serial_number);

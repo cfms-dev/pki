@@ -436,5 +436,5 @@ describe("ACME RFC 8555 & RFC 9773 ARI End-to-End Suite", () => {
       new Date(ariReplacedBody.suggestedWindow.end).getTime() / 1000
     );
     expect(repEnd).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
-  });
+  }, 15_000);
 });

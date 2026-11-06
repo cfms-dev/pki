@@ -34,6 +34,25 @@ export interface AuthorizationRow {
   created_at: number;
 }
 
+export type ChallengeType = "dns-01" | "http-01";
+export type ChallengeStatus = "pending" | "processing" | "valid" | "invalid";
+
+export interface ChallengeRow {
+  id: string;
+  authorization_id: string;
+  type: ChallengeType;
+  token: string;
+  status: ChallengeStatus;
+  error: string | null; // JSON-encoded ACME problem document
+  validated_at: number | null;
+  processing_started_at: number | null;
+  // Incremented atomically by every validation claim. Completion updates are
+  // conditional on the generation captured at claim time so a stale attempt
+  // whose processing claim was reclaimed cannot overwrite the newer result.
+  validation_generation: number;
+  created_at: number;
+}
+
 export interface CertificateRow {
   id: string;
   cert_id: string; // RFC 9773 certID: Base64URL(AKI) + "." + Base64URL(Serial)

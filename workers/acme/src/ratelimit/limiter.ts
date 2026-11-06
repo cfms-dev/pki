@@ -88,24 +88,42 @@ export class RateLimiter {
   }
 
   /**
-   * Checks failed challenge validation limit
+   * Checks the failed-challenge validation limit without consuming a slot.
+   * Call `recordFailedValidation` only after an attempt actually fails.
    */
   async checkFailedValidationLimit(
     accountId: string,
     hostname: string,
     now = Math.floor(Date.now() / 1000)
   ): Promise<void> {
-    const key = `failed:authz:${accountId}:${hostname.toLowerCase()}`;
-    const check = await this.db.checkAndIncrementRateLimit(
+    const key = this.failedValidationKey(accountId, hostname);
+    const counter = await this.db.getRateLimitCounter(
       key,
-      CONFIG.RATE_LIMIT_FAILED_VALIDATIONS,
       CONFIG.RATE_LIMIT_FAILED_WINDOW_SECONDS,
       now
     );
-    if (!check.allowed) {
+    if (counter >= CONFIG.RATE_LIMIT_FAILED_VALIDATIONS) {
       throw AcmeError.rateLimited(
         `Too many failed challenge attempts for ${hostname}. Limit is ${CONFIG.RATE_LIMIT_FAILED_VALIDATIONS} per hour.`
       );
     }
+  }
+
+  /** Records one failed challenge validation attempt. */
+  async recordFailedValidation(
+    accountId: string,
+    hostname: string,
+    now = Math.floor(Date.now() / 1000)
+  ): Promise<void> {
+    await this.db.checkAndIncrementRateLimit(
+      this.failedValidationKey(accountId, hostname),
+      CONFIG.RATE_LIMIT_FAILED_VALIDATIONS,
+      CONFIG.RATE_LIMIT_FAILED_WINDOW_SECONDS,
+      now
+    );
+  }
+
+  private failedValidationKey(accountId: string, hostname: string): string {
+    return `failed:authz:${accountId}:${hostname.toLowerCase()}`;
   }
 }
