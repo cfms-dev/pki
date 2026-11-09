@@ -37,7 +37,8 @@
           <p class="eyebrow">01 / Domain validation</p>
           <h2 id="validation-title">Prove ownership. Issue a certificate.</h2>
           <p>Use DNS-01 to validate a domain through a DNS TXT record, or HTTP-01 to serve a challenge over HTTP.
-            Wildcard certificates require DNS-01.</p>
+            Wildcard certificates require DNS-01. Public IPv4 and IPv6 certificates use HTTP-01
+            and have a maximum validity of 160 hours; mixed domain/IP orders are supported.</p>
           <p>Your ACME client handles account registration, validation and certificate retrieval through the directory
             endpoint.</p>
         </section>

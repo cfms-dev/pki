@@ -1,10 +1,10 @@
 # CFMS-PKI ACME Worker
 
-RFC 8555 ACME server deployed on Cloudflare Workers with a D1 database and a
+RFC 8555 / RFC 8738 ACME server deployed on Cloudflare Workers with a D1 database and a
 weighted pool of intermediate CAs. Supported validation methods:
 
 - `dns-01` (existing, DNS-over-HTTPS TXT lookup)
-- `http-01` (RFC 8555 § 8.3, for non-wildcard DNS identifiers)
+- `http-01` (RFC 8555 § 8.3 / RFC 8738, for non-wildcard DNS and public IP identifiers)
 
 The ACME directory is served at `/directory` (for production:
 `https://acme.cfms-pki.crpteam.club/directory`).
@@ -49,49 +49,46 @@ practices change.
 
 | Identifier | Supported | Notes |
 | --- | --- | --- |
-| `dns` | Yes | Includes wildcard `*.example.com` orders |
-| `ip` (RFC 8738) | No | `new-order` returns `urn:ietf:params:acme:error:unsupportedIdentifier` |
-| anything else | No | Same `unsupportedIdentifier` problem document |
+| `dns` | Yes | Wildcards receive DNS-01 only |
+| `ip` | Yes | Public IPv4/IPv6, HTTP-01 only; mixed DNS/IP orders supported |
+| anything else | No | `unsupportedIdentifier` |
 
-Wildcard identifiers only receive a `dns-01` challenge. HTTP-01 is not offered
-and a manually injected HTTP-01 challenge for a wildcard is rejected as
-`malformed`.
+IP identifiers use standard dotted-decimal IPv4 or unbracketed IPv6. IPv6 is
+canonicalized, and equivalent identifiers are deduplicated by type and value.
+Legacy numeric IPv4 (`127.1`, integer, hexadecimal, octal), brackets, zone IDs,
+ports, wildcards and non-public addresses are rejected before order state is
+written. DNS identifiers continue to reject IP literals, including legacy forms.
 
-A `dns` identifier must actually be a DNS name. IPv4 and IPv6 literals are
-rejected with `urn:ietf:params:acme:error:rejectedIdentifier`, including the
-legacy numeric IPv4 notations that the WHATWG URL parser rewrites into an
-address (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`, `127.0.0.1.`).
-The check runs in the shared identifier validator before any order or
-authorization row is written, so a rejected request leaves no partial state.
-Only `type: "dns"` identifiers are supported; `type: "ip"` and unknown types
-still return `unsupportedIdentifier`.
+IP validation connects directly to the numeric IP using `cloudflare:sockets`,
+initially on TCP/80, with the IP in `Host` (bracketed for IPv6). No initial DNS,
+IP `fetch()`, alias or external proxy is involved. Cloudflare-owned and other
+platform-blocked destinations can still fail with a `connection` problem.
 
-### Why IP identifiers are rejected
+The socket response is parsed by strict llhttp WASM. `build:llhttp` extracts the
+unmodified module from the pinned official `undici@8.12.4` build dependency;
+Undici's HTTP client and runtime loader are not included. Wrangler statically
+imports a precompiled module through a generated shim in `cas/`. Each socket
+uses its own parser instance. See [provenance and ABI notes](src/http01/LLHTTP.md).
 
-A correct RFC 8738 HTTP-01 validation must connect directly to the requested IP
-address on TCP port 80, send an HTTP request with the IP literal in the `Host`
-header, and prove that the response came from that exact address. The current
-Cloudflare Workers runtime does not provide a supported way to do this:
+Orders and certificate SAN metadata now store typed identifier arrays.
+Historical DNS string arrays remain readable. The idempotent D1 schema upgrade
+adds `authorizations.identifier_type TEXT NOT NULL DEFAULT 'dns'`; historical
+records are not rewritten. Deploy the schema and this type-aware Worker together.
+After typed records have been written, rollback must use a type-aware build;
+older DNS-only Workers cannot interpret the new metadata.
 
-- Workers [`fetch()` cannot target IP address literals](https://developers.cloudflare.com/workers/platform/known-issues/#fetch-to-ip-addresses).
-  The documented workaround is to create a DNS name that resolves to the IP,
-  which would no longer be direct RFC 8738 IP validation.
-- The [`connect()` TCP API](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/)
-  blocks private, localhost, and Cloudflare-owned destinations, and the runtime
-  documentation explicitly directs HTTP traffic on ports 80/443 to `fetch()`.
-  Building an ad-hoc HTTP client on raw sockets would not be a documented or
-  stable HTTP validation path.
-- Using an external proxy/VPS or a temporary DNS alias would violate the
-  requirement to validate the requested IP directly.
-
-Because IP validation is not implemented, the RFC 8738 six-day / 160-hour IP
-certificate validity limit is intentionally not introduced: there is no code
-path that can issue a certificate containing an IP SAN.
+Any certificate containing an IP SAN is limited to **160 hours**, additionally
+bounded by the global validity policy and issuer expiry. This follows
+[Let's Encrypt's IP certificate policy](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability),
+not a validity mandate in RFC 8738. Pure DNS certificates retain the existing
+policy. IP ARI windows span 2/3 to 5/6 of the actual issued lifetime; renewals
+require fresh validation. No ACME Profiles extension is advertised or required.
 
 ## HTTP-01 flow
 
-1. `POST /new-order` creates one authorization per unique DNS identifier, plus
-   `dns-01` and (for non-wildcard identifiers) `http-01` challenge rows.
+1. `POST /new-order` creates one authorization per unique typed identifier, plus
+   `dns-01` and (for non-wildcard DNS identifiers) `http-01` challenge rows.
+   IP identifiers receive only `http-01`.
    The `dns-01` challenge deliberately keeps the authorization ID as its
    challenge ID, so existing `/challenge/{authzId}` URLs remain valid.
 2. `POST /authz/{id}` (POST-as-GET) returns both challenges with `type`, `url`,
@@ -114,9 +111,16 @@ path that can issue a certificate containing an IP SAN.
 Each hop is checked before any request is made:
 
 - Initial request: `http:` on port 80 only.
-- Redirects: `http:`/80 or `https:`/443 only; no credentials, fragments, IP
-  literals, local/special-use hostnames, or invalid DNS names.
+- Redirects: `http:`/80 or `https:`/443 only; no credentials, fragments,
+  local/special-use hostnames, invalid DNS names, or non-public IPs. IP-origin
+  validations allow IP and DNS redirects; existing DNS-origin validations
+  continue to reject IP redirect targets. HTTPS always verifies certificates.
 - At most five redirects; redirect loops are rejected.
+- IP hops use numeric sockets, with native TLS for HTTPS/443. Responses use
+  strict llhttp framing, `Connection: close`, and `Accept-Encoding: identity`;
+  non-identity content/transfer encodings, upgrades and ambiguous framing fail.
+  Cumulative headers, trailers and chunk metadata are bounded to 16 KiB, bodies
+  to 8 KiB, and each socket wire response to 64 KiB. All paths close the socket.
 - Hostnames are resolved through public DNS-over-HTTPS (`cloudflare-dns.com`
   and `dns.google`) before every request, and the check is fail-closed:
   - Both the A and the AAAA family must produce a definitive answer. A
@@ -418,9 +422,13 @@ HTTP-01 settings in the same `CONFIG` object:
 | `HTTP01_REQUEST_TIMEOUT_MS` | 10000 | Per-request timeout |
 | `HTTP01_TOTAL_TIMEOUT_MS` | 20000 | Whole-validation budget |
 | `HTTP01_MAX_BODY_BYTES` | 8192 | Response body limit |
+| `HTTP01_MAX_HEADER_BYTES` | 16384 | Socket headers, trailers and chunk metadata |
+| `HTTP01_MAX_WIRE_BYTES` | 65536 | Socket response wire-byte limit |
+| `IP_CERT_VALIDITY_HOURS` | 160 | Maximum validity for any certificate containing IPs |
 | `CHALLENGE_PROCESSING_STALE_SECONDS` | 60 | Processing-claim recovery |
 
-No new secrets, bindings, or third-party dependencies are required.
+No new secrets or bindings are required. Undici is a build-only dependency
+used to extract llhttp WASM; run the complete build before tests or deployment.
 
 ## Tests
 
@@ -432,7 +440,7 @@ npm run build     # bundle CA assets
 
 Relevant suites: `test/http01-validator.spec.ts` (protocol/SSRF/timeout/redirect/
 body/cache handling and fail-closed A/AAAA resolution), `test/http01-flow.spec.ts`
-(order, challenge, concurrency, finalize, wildcard, IP rejection, expiry,
+(order, challenge, concurrency, finalize, wildcard, non-public IP rejection, expiry,
 per-domain CAA methods, legacy orders), `test/identifiers.spec.ts` (DNS
 identifier normalization and IP-literal rejection), `test/finalize-key.spec.ts`
 (RFC 8555 § 11.1 CSR/account key separation, including cross-account reuse),
@@ -455,11 +463,12 @@ generations and stale-claim fencing), and `test/schema-migration.spec.ts`
   wildcards, but the authorization response removes the `*.` prefix from
   `identifier.value` and sets `wildcard: true`. The order object still lists the
   wildcard identifier, as required by § 7.1.3.
-- **Finalize CSR matching (RFC 8555 § 7.4).** The CSR's SAN extension may only
-  contain dNSName entries, and the resulting set (including a syntactically
-  valid commonName) must equal the order identifier set. Non-DNS SAN types
-  (notably IP) are rejected as `badCSR`; the issuer also builds the issued SAN
-  exclusively from the stored order identifiers, never from CSR-supplied names.
+- **Finalize CSR matching (RFC 8555 § 7.4 / RFC 8738).** CSR DNS/IP SANs
+  must exactly match the typed order set. A valid DNS CN is also included in
+  that comparison; an IP CN cannot replace an IP SAN. Other SAN types are
+  rejected. Issued SANs come only from authorized order identifiers, encoded
+  as dNSName/iPAddress. Pure IP certificates have an empty subject and critical
+  SAN; mixed certificates use the first DNS identifier as their CN.
 - **Finalize key selection (RFC 8555 § 11.1).** The CSR public key must not be
   the account key that authenticated the finalize request, and must not reuse a
   key already registered to any other ACME account. Account keys are compared
@@ -517,10 +526,8 @@ generations and stale-claim fencing), and `test/schema-migration.spec.ts`
   always use Full (strict) SSL, so this typically surfaces as an error response
   such as 526. Let's Encrypt/Boulder deliberately skip certificate verification
   when following HTTP-01 redirects, because this challenge is used to bootstrap
-  a valid certificate. This Worker cannot safely emulate that: disabling
-  verification is impossible, and using raw `connect()` sockets to bypass it
-  would replace a documented HTTP transport with an ad hoc one. The limitation
-  is therefore explicit: redirect from `http://` to `https://` works only when
+  a valid certificate. This Worker retains certificate verification for both
+  domain fetches and native-TLS IP sockets. The limitation is explicit: redirect from `http://` to `https://` works only when
   the HTTPS origin has a publicly trusted certificate. Plain-HTTP redirects and
   the initial HTTP request are unaffected.
 - **Cache status is not authoritative.** A `cf-cache-status: HIT` response is
@@ -563,3 +570,17 @@ independent fetch DNS resolution and do not eliminate DNS rebinding risk.
 
 See [the security rollout runbook](../../docs/security-rollout.md) for D1
 backup, migration, Cloudflare credentials, verified revocation export and rollback.
+
+
+### IP acceptance coverage
+
+`test/llhttp.spec.ts`, `test/ip-http01.spec.ts` and `test/ip-flow.spec.ts` cover
+strict framing and fragmentation, bounds, numeric IPv4/IPv6 dial/Host, native
+TLS selection, redirect safety, timeout cleanup, typed orders/SAN issuance,
+160-hour validity, migration, CAA filtering, limits, ARI and revocation.
+`test:runtime` uses the same generated WASM as Node tests and exercises actual
+workerd parsing plus DNS/IP/mixed certificate issuance with disposable CA material.
+The socket peer is injected locally; this is not a live public-network challenge.
+Before production rollout, complete a real deployed-Worker HTTP-01 flow against
+controlled public IPv4 and IPv6 origins. The local connectivity experiment is
+supporting network-primitive evidence and remains outside the production patch.

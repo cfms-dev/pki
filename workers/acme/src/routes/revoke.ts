@@ -1,3 +1,4 @@
+import { readIdentifiers } from "../acme/identifiers";
 import "reflect-metadata";
 import * as x509 from "@peculiar/x509";
 import { normalizePublicKey, verifyAcmeJws } from "../crypto/jws";
@@ -39,7 +40,7 @@ export async function handleRevokeCert(request: Request, database: Database): Pr
   if (verified.account) {
     authorized = row.account_id === verified.account.id;
     if (!authorized) {
-      const domains = JSON.parse(row.san) as string[];
+      const domains = readIdentifiers(row.san);
       authorized = domains.length > 0 && await database.accountHasValidAuthorizations(
         verified.account.id, domains, Math.floor(Date.now() / 1000)
       );

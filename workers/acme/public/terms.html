@@ -32,12 +32,12 @@
             is accepted by your intended clients; issuance does not guarantee trust in browsers or operating systems.</p>
         </section>
         <section aria-labelledby="control">
-          <h2 id="control">Domain control and permitted use</h2>
-          <p>Request certificates only for domains you control or are authorized to manage. Complete validation
+          <h2 id="control">Identifier control and permitted use</h2>
+          <p>Request certificates only for domains and public IP addresses you control or are authorized to manage. Complete validation
             truthfully and use certificates in accordance with applicable requirements.</p>
           <p>Do not attempt to bypass domain validation, impersonate another account, obtain unauthorized certificates,
-            evade rate limits or disrupt the service. Wildcard names require DNS-01 validation; IP-address
-            certificates are not supported.</p>
+            evade rate limits or disrupt the service. Wildcard names require DNS-01 validation. Public IP-address
+            certificates require HTTP-01 and are valid for at most 160 hours, including mixed domain/IP certificates.</p>
         </section>
         <section aria-labelledby="keys">
           <h2 id="keys">Keys, renewal and revocation</h2>

@@ -1,3 +1,5 @@
+import { AcmeIdentifier, asIdentifiers, identifierKey } from "../acme/identifiers";
+import { parseIpv6 } from "../acme/ip";
 import { CONFIG } from "../config";
 import { Database } from "../db/queries";
 import { AcmeError } from "../errors";
@@ -31,7 +33,7 @@ export class RateLimiter {
    */
   async checkNewOrderLimits(
     accountId: string,
-    domains: string[],
+    domains: (string | AcmeIdentifier)[],
     isAriRenewal: boolean,
     now = Math.floor(Date.now() / 1000)
   ): Promise<void> {
@@ -55,9 +57,9 @@ export class RateLimiter {
     }
 
     // 3. Registered Domain Limit
-    const registeredDomains = new Set(domains.map(getRegisteredDomain));
+    const registeredDomains = new Set(asIdentifiers(domains).map(issuanceGroup));
     for (const regDomain of registeredDomains) {
-      const domainKey = `issuance:domain:${regDomain}`;
+      const domainKey = regDomain.startsWith("ip:") ? `issuance:${regDomain}` : `issuance:domain:${regDomain}`;
       const domainCheck = await this.db.checkAndIncrementRateLimit(
         domainKey,
         CONFIG.RATE_LIMIT_CERTS_PER_DOMAIN,
@@ -72,7 +74,8 @@ export class RateLimiter {
     }
 
     // 4. Duplicate Certificate Limit
-    const sortedDomains = domains.slice().sort().join(",");
+    const identifiers = asIdentifiers(domains);
+    const sortedDomains = identifiers.map((item) => item.type === "dns" ? item.value : identifierKey(item)).sort().join(",");
     const duplicateKey = `issuance:duplicate:${sortedDomains}`;
     const duplicateCheck = await this.db.checkAndIncrementRateLimit(
       duplicateKey,
@@ -93,7 +96,7 @@ export class RateLimiter {
    */
   async checkFailedValidationLimit(
     accountId: string,
-    hostname: string,
+    hostname: string | AcmeIdentifier,
     now = Math.floor(Date.now() / 1000)
   ): Promise<void> {
     const key = this.failedValidationKey(accountId, hostname);
@@ -104,7 +107,7 @@ export class RateLimiter {
     );
     if (counter >= CONFIG.RATE_LIMIT_FAILED_VALIDATIONS) {
       throw AcmeError.rateLimited(
-        `Too many failed challenge attempts for ${hostname}. Limit is ${CONFIG.RATE_LIMIT_FAILED_VALIDATIONS} per hour.`
+        `Too many failed challenge attempts for ${typeof hostname === "string" ? hostname : hostname.value}. Limit is ${CONFIG.RATE_LIMIT_FAILED_VALIDATIONS} per hour.`
       );
     }
   }
@@ -112,7 +115,7 @@ export class RateLimiter {
   /** Records one failed challenge validation attempt. */
   async recordFailedValidation(
     accountId: string,
-    hostname: string,
+    hostname: string | AcmeIdentifier,
     now = Math.floor(Date.now() / 1000)
   ): Promise<void> {
     await this.db.checkAndIncrementRateLimit(
@@ -123,7 +126,18 @@ export class RateLimiter {
     );
   }
 
-  private failedValidationKey(accountId: string, hostname: string): string {
-    return `failed:authz:${accountId}:${hostname.toLowerCase()}`;
+  private failedValidationKey(accountId: string, hostname: string | AcmeIdentifier): string {
+    const identifier = asIdentifiers([hostname])[0];
+    const key = identifier.type === "dns" ? identifier.value : identifierKey(identifier);
+    return `failed:authz:${accountId}:${key}`;
   }
+}
+
+
+export function issuanceGroup(identifier: AcmeIdentifier): string {
+  if (identifier.type === "dns") return getRegisteredDomain(identifier.value);
+  if (!identifier.value.includes(":")) return `ip:v4:${identifier.value}`;
+  const bytes = parseIpv6(identifier.value);
+  if (!bytes) throw new Error("Invalid IPv6 rate-limit identifier");
+  return `ip:v6:${Array.from(bytes.slice(0, 8), (byte) => byte.toString(16).padStart(2, "0")).join("")}/64`;
 }

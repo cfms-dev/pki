@@ -1,4 +1,4 @@
-import { AcmeEnv, CONFIG, configuredDays, getTermsOfServiceUrl } from "../config";
+import { AcmeEnv, CONFIG, configuredDays, certificateValiditySeconds, getTermsOfServiceUrl } from "../config";
 import { generateNonceString } from "../crypto/nonce";
 import { normalizePublicKey, verifyAcmeJws } from "../crypto/jws";
 import {
@@ -15,7 +15,7 @@ import { AcmeError } from "../errors";
 import { checkAriRenewalEligibility } from "../ari/window";
 import { RateLimiter } from "../ratelimit/limiter";
 import { buildChallengesForAuthorization } from "../acme/challenges";
-import { validateDnsIdentifier } from "../acme/identifiers";
+import { AcmeIdentifier, identifierKey, readIdentifiers, validateDnsIdentifier, validateIpIdentifier } from "../acme/identifiers";
 import { syncOrderState } from "../acme/state";
 
 interface NewOrderPayload {
@@ -50,7 +50,7 @@ export async function handleNewOrder(
     throw AcmeError.malformed("newOrder must specify at least one identifier");
   }
 
-  const domainList: string[] = [];
+  const identifiers: AcmeIdentifier[] = [];
   for (const ident of payload.identifiers) {
     if (
       !ident ||
@@ -63,28 +63,17 @@ export async function handleNewOrder(
       );
     }
 
-    if (ident.type !== "dns") {
-      // RFC 8555 § 6.7 unsupportedIdentifier. This server intentionally does
-      // not implement RFC 8738 IP validation: Workers fetch() cannot target IP
-      // literals and the documented TCP-socket path is not a supported HTTP
-      // validation transport. Rejecting the identifier prevents orders that
-      // could never be validated from being created.
-      throw AcmeError.unsupportedIdentifier(
-        `Identifier type '${ident.type}' is not supported. Only 'dns' identifiers can be validated by this ACME server.`
-      );
+    if (ident.type !== "dns" && ident.type !== "ip") {
+      throw AcmeError.unsupportedIdentifier(`Identifier type '${ident.type}' is not supported`);
     }
-
-    // A DNS identifier must be a DNS name, not an IP address literal. The
-    // shared validator also rejects legacy numeric IPv4 notations that the URL
-    // parser would turn into an IP address. Nothing is persisted before every
-    // identifier has been validated.
-    const validated = validateDnsIdentifier(ident.value);
+    const validated = ident.type === "ip" ? validateIpIdentifier(ident.value) : validateDnsIdentifier(ident.value);
     if (!validated.ok) {
       throw validated.errorType === "malformed"
         ? AcmeError.malformed(validated.detail)
         : AcmeError.rejectedIdentifier(validated.detail);
     }
-    domainList.push(validated.value);
+    const identifier: AcmeIdentifier = { type: ident.type, value: validated.value };
+    if (!identifiers.some((item) => identifierKey(item) === identifierKey(identifier))) identifiers.push(identifier);
   }
 
   // Evaluate ARI Renewal & Exemption
@@ -99,7 +88,7 @@ export async function handleNewOrder(
       );
     }
 
-    const eligibility = checkAriRenewalEligibility(predecessor, domainList, undefined, configuredDays(CONFIG.RENEWAL_WINDOW_DAYS));
+    const eligibility = checkAriRenewalEligibility(predecessor, identifiers, undefined, configuredDays(CONFIG.RENEWAL_WINDOW_DAYS));
     if (!eligibility.eligible) {
       throw AcmeError.malformed(
         `ARI renewal rejected: ${eligibility.reason || "Certificate not eligible for ARI renewal"}`
@@ -112,7 +101,7 @@ export async function handleNewOrder(
 
   // Check Rate Limits (exempts duplicate & domain caps if isAriRenewal == true)
   const rateLimiter = new RateLimiter(database);
-  await rateLimiter.checkNewOrderLimits(verified.account.id, domainList, isAriRenewal);
+  await rateLimiter.checkNewOrderLimits(verified.account.id, identifiers, isAriRenewal);
 
   const orderId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
@@ -120,7 +109,7 @@ export async function handleNewOrder(
 
   const requestedBefore = parseRequestedDate(payload.notBefore);
   const requestedAfter = parseRequestedDate(payload.notAfter);
-  const maxValidity = configuredDays(CONFIG.CERT_VALIDITY_DAYS) * 86400;
+  const maxValidity = certificateValiditySeconds(identifiers);
   const effectiveBefore = requestedBefore ?? now;
   if ((requestedBefore !== null && requestedBefore < now - 300) ||
       (requestedAfter !== null && (requestedAfter <= effectiveBefore || requestedAfter - effectiveBefore > maxValidity))) {
@@ -130,7 +119,7 @@ export async function handleNewOrder(
     id: orderId,
     account_id: verified.account.id,
     status: "pending",
-    identifiers: JSON.stringify(domainList),
+    identifiers: JSON.stringify(identifiers),
     not_before: requestedBefore,
     not_after: requestedAfter,
     replaces_cert_id: replacesCertId,
@@ -146,15 +135,14 @@ export async function handleNewOrder(
   // All authorizations are issued fresh in 'pending' status, requiring
   // re-verification through dns-01 or http-01.
   const authzIds: string[] = [];
-  const uniqueDomains = Array.from(new Set(domainList));
-
-  for (const domain of uniqueDomains) {
+  for (const identifier of identifiers) {
     const authzId = crypto.randomUUID();
     const token = generateNonceString();
     const authz: AuthorizationRow = {
       id: authzId,
       order_id: orderId,
-      identifier_value: domain,
+      identifier_value: identifier.value,
+      identifier_type: identifier.type,
       status: "pending",
       token,
       expires_at: now + CONFIG.AUTHZ_EXPIRATION_SECONDS,
@@ -270,16 +258,11 @@ export async function handleFinalizeOrder(
   // Parse & verify CSR before claiming the order so malformed requests do not
   // move the order into `processing`.
   const parsedCsr = await parseAndVerifyCsr(verified.payload.csr);
-  const orderDomains: string[] = JSON.parse(order.identifiers);
-
-  // Validate CSR domains match order identifiers
-  const orderSet = new Set(orderDomains.map((d) => d.toLowerCase()));
-  const csrSet = new Set(parsedCsr.domains.map((d) => d.toLowerCase()));
-
-  if (orderSet.size !== csrSet.size || !orderDomains.every((d) => csrSet.has(d.toLowerCase()))) {
-    throw AcmeError.badCSR(
-      `CSR domains [${parsedCsr.domains.join(", ")}] do not match order domains [${orderDomains.join(", ")}]`
-    );
+  const orderIdentifiers = readIdentifiers(order.identifiers);
+  const orderSet = new Set(orderIdentifiers.map(identifierKey));
+  const csrSet = new Set(parsedCsr.identifiers.map(identifierKey));
+  if (orderSet.size !== csrSet.size || ![...orderSet].every((key) => csrSet.has(key))) {
+    throw AcmeError.badCSR("CSR identifiers do not match order identifiers");
   }
 
   // RFC 8555 § 11.1 Key Selection: the CSR public key must differ from the
@@ -348,7 +331,7 @@ export async function handleFinalizeOrder(
       methodsByDomain.set(domain, methods);
     }
     await validateCaaForOrder(
-      orderDomains,
+      orderIdentifiers.filter((item) => item.type === "dns").map((item) => item.value),
       accountUri,
       env,
       undefined,
@@ -362,7 +345,7 @@ export async function handleFinalizeOrder(
     // Issue Certificate with selected intermediate CA
     const issued = await issueCertificateFromCsr(
       parsedCsr.csr,
-      orderDomains,
+      orderIdentifiers,
       env,
       configuredDays(CONFIG.CERT_VALIDITY_DAYS),
       selectedCa,
@@ -504,9 +487,7 @@ function formatOrderResponse(
   baseUrl: string,
   status: number
 ): Response {
-  const identifiers: Array<{ type: string; value: string }> = JSON.parse(
-    order.identifiers
-  ).map((val: string) => ({ type: "dns", value: val }));
+  const identifiers = readIdentifiers(order.identifiers);
 
   const body: Record<string, unknown> = {
     status: order.status,

@@ -49,12 +49,12 @@ export async function handleGetAuthz(
 
   // RFC 8555 § 7.1.4: a wildcard authorization MUST NOT include the "*." prefix
   // in identifier.value. The base domain is returned and "wildcard" is true.
-  const isWildcard = isWildcardDnsName(authz.identifier_value);
+  const isWildcard = authz.identifier_type !== "ip" && isWildcardDnsName(authz.identifier_value);
   const body: Record<string, unknown> = {
     status: authz.status,
     expires: new Date(authz.expires_at * 1000).toISOString(),
     identifier: {
-      type: "dns",
+      type: authz.identifier_type ?? "dns",
       value: isWildcard ? authz.identifier_value.slice(2) : authz.identifier_value,
     },
     challenges: challenges.map((challenge) => formatChallenge(challenge, baseUrl)),

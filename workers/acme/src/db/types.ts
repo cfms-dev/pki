@@ -34,7 +34,7 @@ export interface OrderRow {
   id: string;
   account_id: string;
   status: "pending" | "ready" | "processing" | "valid" | "invalid";
-  identifiers: string; // JSON array of domain strings e.g. ["example.com"]
+  identifiers: string; // Typed identifiers; legacy DNS string arrays remain readable.
   not_before: number | null;
   not_after: number | null;
   replaces_cert_id: string | null; // RFC 9773 predecessor certID
@@ -49,7 +49,8 @@ export interface OrderRow {
 export interface AuthorizationRow {
   id: string;
   order_id: string;
-  identifier_value: string; // domain name e.g. "example.com"
+  identifier_value: string;
+  identifier_type?: "dns" | "ip"; // absent only on legacy in-memory callers
   status: "pending" | "valid" | "invalid";
   token: string;
   expires_at: number;
@@ -82,7 +83,7 @@ export interface CertificateRow {
   serial_number: string; // Hex or integer string
   aki: string; // Hex string of Authority Key Identifier
   subject: string;
-  san: string; // JSON array of SAN strings
+  san: string; // Typed identifiers; legacy DNS string arrays remain readable.
   pem: string;
   not_before: number;
   not_after: number;

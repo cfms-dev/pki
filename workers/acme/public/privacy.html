@@ -52,6 +52,9 @@
             infrastructure provider. See <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare's privacy policy</a>
             for its own practices.</p>
           <p>Domain validation makes DNS-over-HTTPS queries, including through Cloudflare and Google resolvers.
+            IP validation connects directly to the public IP over TCP, without an initial DNS lookup. HTTP-01
+            requests expose the challenge token and key authorization exchange to the target; redirects may
+            contact additional public IPs or domains. HTTPS targets use certificate-verified TLS.
             These queries disclose the queried names to the resolver. HTTP-01 validation contacts the domain's web
             server and may follow permitted redirects, disclosing challenge paths to the contacted servers.
             CAA lookups are also used to check certificate issuance permissions.</p>

@@ -12,5 +12,6 @@ const originalConfig = structuredClone(CONFIG);
 beforeEach(() => Object.assign(CONFIG, structuredClone(originalConfig)));
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   Object.assign(CONFIG, structuredClone(originalConfig));
 });

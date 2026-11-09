@@ -19,6 +19,7 @@ export const CONFIG = {
   CRL_BASE_URL: "https://cfms-dev.github.io/pki/crl/",
 
   CERT_VALIDITY_DAYS: 90,
+  IP_CERT_VALIDITY_HOURS: 160,
   RENEWAL_WINDOW_DAYS: 30,
   NONCE_EXPIRATION_SECONDS: 300,   // 5 minutes
   ORDER_EXPIRATION_SECONDS: 86400 * 7, // 7 days
@@ -30,6 +31,8 @@ export const CONFIG = {
   HTTP01_REQUEST_TIMEOUT_MS: 10000,
   HTTP01_TOTAL_TIMEOUT_MS: 20000,
   HTTP01_MAX_BODY_BYTES: 8192,
+  HTTP01_MAX_HEADER_BYTES: 16384,
+  HTTP01_MAX_WIRE_BYTES: 65536,
   CHALLENGE_PROCESSING_STALE_SECONDS: 60, // allow recovery from an interrupted validation
 
   // Rate Limits
@@ -82,4 +85,14 @@ export function getExternalAccountRequired(): boolean {
 export function configuredDays(value: number): number {
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error("Invalid day configuration");
   return value;
+}
+
+
+/** Shared issuance policy in integer seconds, including mixed DNS/IP orders. */
+export function certificateValiditySeconds(identifiers: readonly { type: string }[], validityDays = CONFIG.CERT_VALIDITY_DAYS): number {
+  const globalLimit = configuredDays(validityDays) * 86400;
+  if (!identifiers.some((identifier) => identifier.type === "ip")) return globalLimit;
+  const hours = CONFIG.IP_CERT_VALIDITY_HOURS;
+  if (!Number.isSafeInteger(hours) || hours <= 0 || hours > 160) throw new Error("Invalid IP validity configuration");
+  return Math.min(globalLimit, hours * 3600);
 }

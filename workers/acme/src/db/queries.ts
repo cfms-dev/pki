@@ -1,3 +1,4 @@
+import { AcmeIdentifier, asIdentifiers } from "../acme/identifiers";
 import {
   AccountRow,
   AuthorizationRow,
@@ -67,6 +68,7 @@ export class Database {
             id TEXT PRIMARY KEY,
             order_id TEXT NOT NULL,
             identifier_value TEXT NOT NULL,
+            identifier_type TEXT NOT NULL DEFAULT 'dns',
             status TEXT NOT NULL,
             token TEXT NOT NULL,
             expires_at INTEGER NOT NULL,
@@ -126,6 +128,7 @@ export class Database {
       ["orders", "processing_started_at", "INTEGER"],
       ["orders", "finalize_generation", "INTEGER NOT NULL DEFAULT 0"],
       ["certificates", "ca_id", "TEXT"],
+      ["authorizations", "identifier_type", "TEXT NOT NULL DEFAULT 'dns'"],
     ]) {
       const columns = await this.db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
       if (!(columns.results ?? []).some((entry) => entry.name === column)) {
@@ -574,12 +577,13 @@ export class Database {
   async saveAuthorization(authz: AuthorizationRow): Promise<void> {
     await this.db
       .prepare(
-        "INSERT INTO authorizations (id, order_id, identifier_value, status, token, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO authorizations (id, order_id, identifier_value, identifier_type, status, token, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
       )
       .bind(
         authz.id,
         authz.order_id,
         authz.identifier_value,
+        authz.identifier_type ?? "dns",
         authz.status,
         authz.token,
         authz.expires_at,
@@ -971,12 +975,12 @@ export class Database {
     return (result.meta?.changes ?? 0) === 1;
   }
 
-  async accountHasValidAuthorizations(accountId: string, domains: string[], now: number): Promise<boolean> {
-    for (const domain of domains) {
+  async accountHasValidAuthorizations(accountId: string, domains: (string | AcmeIdentifier)[], now: number): Promise<boolean> {
+    for (const domain of asIdentifiers(domains)) {
       const row = await this.db.prepare(
         `SELECT a.id FROM authorizations a JOIN orders o ON o.id = a.order_id
-         WHERE o.account_id = ? AND a.identifier_value = ? AND a.status = 'valid' AND a.expires_at > ? LIMIT 1`
-      ).bind(accountId, domain, now).first();
+         WHERE o.account_id = ? AND a.identifier_value = ? AND a.identifier_type = ? AND a.status = 'valid' AND a.expires_at > ? LIMIT 1`
+      ).bind(accountId, domain.value, domain.type, now).first();
       if (!row) return false;
     }
     return true;

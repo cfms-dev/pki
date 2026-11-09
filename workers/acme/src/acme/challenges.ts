@@ -24,7 +24,7 @@ export function buildChallengesForAuthorization(
     created_at: authz.created_at,
   };
 
-  const challenges: ChallengeRow[] = [
+  const challenges: ChallengeRow[] = authz.identifier_type === "ip" ? [] : [
     {
       ...base,
       id: authz.id,

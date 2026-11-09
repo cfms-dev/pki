@@ -1,3 +1,4 @@
+import { AcmeIdentifier, asIdentifiers, identifierKey, readIdentifiers } from "../acme/identifiers";
 import { CONFIG, configuredDays } from "../config";
 import { CertificateRow } from "../db/types";
 
@@ -30,6 +31,14 @@ export function computeSuggestedWindow(
     };
   }
 
+  if (readIdentifiers(cert.san).some((item) => item.type === "ip")) {
+    const duration = cert.not_after - cert.not_before;
+    return {
+      start: new Date((cert.not_before + Math.floor(duration * 2 / 3)) * 1000).toISOString(),
+      end: new Date((cert.not_before + Math.floor(duration * 5 / 6)) * 1000).toISOString(),
+    };
+  }
+
   // Standard window: duration of 30 days ending at not_after
   // (e.g. For 90-day validity: from day 60 to day 90)
   const windowSeconds = configuredDays(renewalWindowDays) * 86400;
@@ -47,7 +56,7 @@ export function computeSuggestedWindow(
  */
 export function checkAriRenewalEligibility(
   predecessorCert: CertificateRow,
-  requestedDomains: string[],
+  requestedDomains: (string | AcmeIdentifier)[],
   now = Math.floor(Date.now() / 1000),
   renewalWindowDays = CONFIG.RENEWAL_WINDOW_DAYS
 ): { eligible: boolean; reason?: string } {
@@ -60,19 +69,19 @@ export function checkAriRenewalEligibility(
   }
 
   // 2. Check identifier overlap (requested domains must be subset or equal to predecessor cert SANs)
-  let existingSans: string[] = [];
+  let existingSans: AcmeIdentifier[] = [];
   try {
-    existingSans = JSON.parse(predecessorCert.san) as string[];
+    existingSans = readIdentifiers(predecessorCert.san);
   } catch {
     return { eligible: false, reason: "Malformed predecessor SAN metadata" };
   }
 
-  const existingSet = new Set(existingSans.map((d) => d.toLowerCase()));
-  for (const domain of requestedDomains) {
-    if (!existingSet.has(domain.toLowerCase())) {
+  const existingSet = new Set(existingSans.map(identifierKey));
+  for (const domain of asIdentifiers(requestedDomains)) {
+    if (!existingSet.has(identifierKey(domain))) {
       return {
         eligible: false,
-        reason: `Requested identifier '${domain}' was not part of predecessor certificate`,
+        reason: `Requested identifier '${domain.value}' was not part of predecessor certificate`,
       };
     }
   }

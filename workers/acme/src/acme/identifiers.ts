@@ -1,18 +1,5 @@
-// Shared ACME identifier helpers.
-//
-// RFC 8555 only defines the "dns" identifier type. Wildcard identifiers are
-// represented as "*.example.com" and are only eligible for dns-01 validation.
-//
-// This server issues DNS certificates only. An RFC 8738 "ip" identifier is
-// rejected with `unsupportedIdentifier`, and an IPv4/IPv6 literal submitted
-// with type "dns" is rejected as an identifier that cannot be authorized for a
-// DNS certificate.
-//
-// IP-literal detection deliberately does not rely on a dotted-quad regex: the
-// WHATWG URL parser rewrites legacy numeric notations ("127.1", "2130706433",
-// "0x7f000001", "0177.0.0.1") into canonical dotted-quad addresses. Any host
-// that the URL parser interprets as an IP address must not be treated as a
-// regular DNS name by this server.
+import { isIP } from "node:net";
+import { isPublicIpAddress } from "./ip";
 
 const DNS_NAME_REGEX =
   /^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
@@ -198,8 +185,7 @@ export type DnsIdentifierValidation =
  * Returns the normalized (trimmed and lower-cased) value on success.
  *
  * IP literals are rejected here, before an Order or Authorization row is
- * created, because this ACME server has no IP validation method and must not
- * issue IP certificates.
+ * created, to preserve the distinction between DNS and IP identifiers.
  */
 export function validateDnsIdentifier(
   value: unknown,
@@ -232,7 +218,7 @@ export function validateDnsIdentifier(
     return {
       ok: false,
       errorType: "rejectedIdentifier",
-      detail: `Identifier '${value}' is an IP address literal; this ACME server only issues certificates for DNS identifiers`,
+      detail: `Identifier '${value}' is an IP address literal; use type 'ip' for IP certificates`,
     };
   }
   if (!isValidDnsIdentifier(candidate, allowWildcard)) {
@@ -244,4 +230,50 @@ export function validateDnsIdentifier(
   }
 
   return { ok: true, value: candidate };
+}
+
+
+export interface AcmeIdentifier {
+  type: "dns" | "ip";
+  value: string;
+}
+
+/** IP identifiers do not accept URL syntax, scoped addresses or legacy IPv4. */
+export function normalizeIpAddress(value: string): string | null {
+  if (value.includes("%") || !isIP(value)) return null;
+  if (isIP(value) === 4) return value;
+  return new URL(`http://[${value}]/`).hostname.slice(1, -1);
+}
+
+export function validateIpIdentifier(value: unknown): DnsIdentifierValidation {
+  if (typeof value !== "string") return { ok: false, errorType: "malformed", detail: "An 'ip' identifier value must be a string" };
+  const address = normalizeIpAddress(value.trim());
+  if (!address || !isPublicIpAddress(address)) {
+    return { ok: false, errorType: "rejectedIdentifier", detail: "IP identifier must be a public, unscoped IPv4 or IPv6 address" };
+  }
+  return { ok: true, value: address };
+}
+
+export function identifierKey(identifier: AcmeIdentifier): string {
+  return `${identifier.type}:${identifier.value}`;
+}
+
+/** Legacy string arrays were exclusively DNS names; never infer their type. */
+export function readIdentifiers(json: string): AcmeIdentifier[] {
+  const values: unknown = JSON.parse(json);
+  if (!Array.isArray(values)) throw new Error("Invalid identifier metadata");
+  return values.map((entry: unknown) => {
+    if (typeof entry === "string") return { type: "dns", value: entry.toLowerCase() };
+    if (!entry || typeof entry !== "object") throw new Error("Invalid identifier metadata");
+    const item = entry as Record<string, unknown>;
+    if ((item.type !== "dns" && item.type !== "ip") || typeof item.value !== "string") throw new Error("Invalid identifier metadata");
+    const value = item.type === "ip" ? normalizeIpAddress(item.value) : item.value.toLowerCase();
+    if (!value) throw new Error("Invalid IP metadata");
+    return { type: item.type, value };
+  });
+}
+
+/** Allows internal DNS-only callers to keep their string-array interface. */
+export function asIdentifiers(values: readonly (string | AcmeIdentifier)[]): AcmeIdentifier[] {
+  return values.map((value) => typeof value === "string" ? { type: "dns", value: value.toLowerCase() } : value);
 }

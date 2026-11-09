@@ -10,7 +10,7 @@
   "scripts": {
     "build:cas": "node scripts/bundle-cas.mjs",
     "build:website": "node scripts/build-website.mjs",
-    "build": "npm run build:cas && npm run build:website",
+    "build": "npm run build:cas && npm run build:llhttp && npm run build:website",
     "generate:types": "wrangler types",
     "pretypecheck": "npm run generate:types",
     "typecheck": "tsc --noEmit",
@@ -19,7 +19,8 @@
     "dev": "wrangler dev --types",
     "deploy": "wrangler deploy",
     "migrate:account-keys": "node scripts/migrate-account-keys.mjs",
-    "test:runtime": "node scripts/runtime-smoke.mjs"
+    "test:runtime": "node scripts/runtime-smoke.mjs",
+    "build:llhttp": "node scripts/build-llhttp.mjs"
   },
   "dependencies": {
     "@peculiar/x509": "^3.1.0",
@@ -27,10 +28,11 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
+    "undici": "8.12.4",
     "vitest": "^5.1.0",
-    "wrangler": "^4.158.0",
-    "esbuild": "^0.28.2"
+    "wrangler": "^4.158.0"
   },
   "packageManager": "npm@12.2.2",
   "allowScripts": {

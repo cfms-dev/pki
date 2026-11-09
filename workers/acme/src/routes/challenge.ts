@@ -121,22 +121,22 @@ export async function handleChallenge(
   }
 
   if (
-    challenge.type === "http-01" &&
-    isWildcardDnsName(authorization.identifier_value)
+    (challenge.type === "http-01" && isWildcardDnsName(authorization.identifier_value)) ||
+    (challenge.type === "dns-01" && authorization.identifier_type === "ip")
   ) {
-    const wildcardAttempt = await database.claimChallengeForValidation(
+    const invalidMethodAttempt = await database.claimChallengeForValidation(
       challenge.id,
       now,
       staleBefore
     );
-    if (wildcardAttempt !== null) {
+    if (invalidMethodAttempt !== null) {
       const problem = buildProblem(
         "malformed",
-        "Wildcard identifiers cannot be validated with HTTP-01"
+        "Challenge method is not allowed for this identifier"
       );
       await database.completeChallengeValidationFailure(
         challenge.id,
-        wildcardAttempt,
+        invalidMethodAttempt,
         authorization.id,
         order.id,
         problemJson(problem)
@@ -156,7 +156,7 @@ export async function handleChallenge(
   const rateLimiter = new RateLimiter(database);
   await rateLimiter.checkFailedValidationLimit(
     verified.account.id,
-    authorization.identifier_value
+    { type: authorization.identifier_type ?? "dns", value: authorization.identifier_value }
   );
 
   const validationGeneration = await database.claimChallengeForValidation(
@@ -176,10 +176,10 @@ export async function handleChallenge(
   try {
     if (challenge.type === "http-01") {
       const result = await validateHttp01Challenge(
-        authorization.identifier_value,
+        { type: authorization.identifier_type ?? "dns", value: authorization.identifier_value },
         challenge.token,
         verified.thumbprint,
-        { fetchImpl }
+        { fetchImpl, signal: request.signal }
       );
       validation = result.valid
         ? { valid: true }
@@ -260,7 +260,7 @@ export async function handleChallenge(
   try {
     await rateLimiter.recordFailedValidation(
       verified.account.id,
-      authorization.identifier_value
+      { type: authorization.identifier_type ?? "dns", value: authorization.identifier_value }
     );
   } catch {
     // State is already persisted; do not turn a validation failure into a 500.

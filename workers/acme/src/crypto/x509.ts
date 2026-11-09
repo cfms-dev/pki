@@ -1,8 +1,8 @@
 import "reflect-metadata";
 import * as x509 from "@peculiar/x509";
-import { AcmeEnv, CONFIG, configuredDays } from "../config";
+import { AcmeEnv, CONFIG, certificateValiditySeconds } from "../config";
 import { AcmeError } from "../errors";
-import { isValidDnsIdentifier } from "../acme/identifiers";
+import { AcmeIdentifier, asIdentifiers, identifierKey, isValidDnsIdentifier, validateDnsIdentifier, validateIpIdentifier } from "../acme/identifiers";
 import { base64UrlDecode } from "./nonce";
 import { derivePublicKeyIdentityFromCryptoKey } from "./jws";
 import { bytesToHex, computeCertId } from "../ari/cert-id";
@@ -14,7 +14,8 @@ import {
 
 export interface ParsedCsr {
   csr: x509.Pkcs10CertificateRequest;
-  domains: string[];
+  domains: string[]; // DNS-only compatibility view
+  identifiers: AcmeIdentifier[];
   publicKey: CryptoKey;
   /** Canonical SubjectPublicKeyInfo DER encoding of the CSR public key. */
   publicKeySpki: Uint8Array;
@@ -33,7 +34,7 @@ export interface IssuedCertificate {
   notBefore: number;    // unix seconds
   notAfter: number;     // unix seconds
   subject: string;
-  san: string[];
+  san: AcmeIdentifier[];
   caId: string;
   caSerialNumber: string;
 }
@@ -101,26 +102,17 @@ export async function parseAndVerifyCsr(csrBase64Url: string): Promise<ParsedCsr
     throw AcmeError.badCSR("CSR signature verification failed");
   }
 
-  // Extract identifiers from the subjectAltName extension. RFC 8555 § 7.4
-  // requires the CSR to request exactly the order's identifiers, and this
-  // server only supports "dns", so any other SAN type (notably "ip") is an
-  // unauthorized identifier and must be rejected rather than ignored.
-  const domains: string[] = [];
+  const identifiers: AcmeIdentifier[] = [];
   for (const ext of csr.extensions) {
     if (ext.type !== "2.5.29.17") continue;
-
     const sanExt = new x509.SubjectAlternativeNameExtension(ext.rawData);
     for (const item of sanExt.names.items) {
-      if (item.type !== "dns") {
-        throw AcmeError.badCSR(
-          `CSR subjectAltName contains an unsupported identifier type '${item.type}'; only DNS identifiers are supported`
-        );
+      if (item.type !== "dns" && item.type !== "ip") {
+        throw AcmeError.badCSR(`CSR contains unsupported SAN type '${item.type}'`);
       }
-      const value = item.value?.trim().toLowerCase();
-      if (!value) {
-        throw AcmeError.badCSR("CSR subjectAltName contains an empty DNS identifier");
-      }
-      domains.push(value);
+      const result = item.type === "ip" ? validateIpIdentifier(item.value) : validateDnsIdentifier(item.value);
+      if (!result.ok) throw AcmeError.badCSR(result.detail);
+      identifiers.push({ type: item.type, value: result.value });
     }
   }
 
@@ -132,18 +124,17 @@ export async function parseAndVerifyCsr(csrBase64Url: string): Promise<ParsedCsr
   for (const cn of csr.subjectName.getField("CN")) {
     const value = cn.trim().toLowerCase();
     if (isValidDnsIdentifier(value)) {
-      domains.push(value);
+      identifiers.push({ type: "dns", value });
     }
   }
 
-  const uniqueDomains = Array.from(new Set(domains));
-  if (uniqueDomains.length === 0) {
-    throw AcmeError.badCSR("CSR contains no DNS Subject Alternative Names or Common Name");
-  }
+  const uniqueIdentifiers = [...new Map(identifiers.map((item) => [identifierKey(item), item])).values()];
+  if (uniqueIdentifiers.length === 0) throw AcmeError.badCSR("CSR contains no authorized identifiers");
 
   return {
     csr,
-    domains: uniqueDomains,
+    identifiers: uniqueIdentifiers,
+    domains: uniqueIdentifiers.filter((item) => item.type === "dns").map((item) => item.value),
     ...(await derivePublicKeyIdentity(csr.publicKey)),
   };
 }
@@ -160,16 +151,19 @@ export function generateRandomSerialNumberHex(): string {
 }
 
 /**
- * Issues a 90-day leaf certificate signed by the intermediate CA
+ * Issues a policy-bounded leaf certificate signed by the intermediate CA
  */
 export async function issueCertificateFromCsr(
   csr: x509.Pkcs10CertificateRequest,
-  authorizedDomains: string[],
+  authorizedDomains: (string | AcmeIdentifier)[],
   env: AcmeEnv,
   validityDays = CONFIG.CERT_VALIDITY_DAYS,
   explicitCa?: SelectedIntermediateCa,
   requested?: { notBefore: number | null; notAfter: number | null }
 ): Promise<IssuedCertificate> {
+  const identifiers = asIdentifiers(authorizedDomains);
+  const subjectDns = identifiers.find((item) => item.type === "dns");
+  const subject = subjectDns ? `CN=${subjectDns.value}` : "";
   const selected = explicitCa || (await selectIntermediateCa(env));
   const caCertPem = selected.certPem;
   const caCert = selected.cert;
@@ -177,7 +171,7 @@ export async function issueCertificateFromCsr(
 
   const now = new Date();
   const notBefore = requested?.notBefore ? new Date(requested.notBefore * 1000) : now;
-  const maximumEnd = Math.min(notBefore.getTime() + configuredDays(validityDays) * 86400 * 1000, caCert.notAfter.getTime());
+  const maximumEnd = Math.min(notBefore.getTime() + certificateValiditySeconds(identifiers, validityDays) * 1000, caCert.notAfter.getTime());
   const notAfter = requested?.notAfter ? new Date(requested.notAfter * 1000) : new Date(maximumEnd);
   if (notBefore < caCert.notBefore || notBefore >= caCert.notAfter || notAfter <= notBefore || notAfter.getTime() > maximumEnd || notAfter <= now) {
     throw AcmeError.badCSR("Requested certificate validity exceeds issuer validity or policy");
@@ -195,7 +189,7 @@ export async function issueCertificateFromCsr(
   // SAN entries are built exclusively from the already-authorized order
   // identifiers. CSR-supplied names are only used for the finalize equality
   // check in routes/order.ts; they are never copied into the certificate.
-  const sanNames = authorizedDomains.map((d) => ({ type: "dns" as const, value: d }));
+  const sanNames = identifiers.map((item) => ({ type: item.type, value: item.value }));
 
   const extensions: x509.Extension[] = [
     new x509.BasicConstraintsExtension(false, undefined, true),
@@ -207,7 +201,7 @@ export async function issueCertificateFromCsr(
       [x509.ExtendedKeyUsage.serverAuth, x509.ExtendedKeyUsage.clientAuth],
       false
     ),
-    new x509.SubjectAlternativeNameExtension(sanNames),
+    new x509.SubjectAlternativeNameExtension(sanNames, !subjectDns),
     skiExt,
     akiExt,
     new x509.CRLDistributionPointsExtension([
@@ -224,7 +218,7 @@ export async function issueCertificateFromCsr(
 
   const leafCert = await x509.X509CertificateGenerator.create({
     serialNumber: serialHex,
-    subject: `CN=${authorizedDomains[0]}`,
+    subject,
     issuer: caCert.subject,
     notBefore,
     notAfter,
@@ -251,8 +245,8 @@ export async function issueCertificateFromCsr(
     certId,
     notBefore: Math.floor(notBefore.getTime() / 1000),
     notAfter: Math.floor(notAfter.getTime() / 1000),
-    subject: `CN=${authorizedDomains[0]}`,
-    san: authorizedDomains,
+    subject,
+    san: identifiers,
     caId: selected.ca.id,
     caSerialNumber: caCert.serialNumber,
   };

@@ -412,16 +412,16 @@ describe("HTTP-01 ACME integration", () => {
     expect(challengeRequests).toBe(1);
   });
 
-  it("rejects IP identifiers with an ACME unsupportedIdentifier problem and creates no order", async () => {
+  it("rejects non-public IP identifiers without creating an order", async () => {
     const result = await createOrder(env, account, [
       { type: "ip", value: "192.0.2.1" },
     ]);
 
     expect(result.response.status).toBe(400);
     expect(result.body.type).toBe(
-      "urn:ietf:params:acme:error:unsupportedIdentifier"
+      "urn:ietf:params:acme:error:rejectedIdentifier"
     );
-    expect(String(result.body.detail)).toContain("ip");
+    expect(String(result.body.detail).toLowerCase()).toContain("ip");
 
     const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM orders").first<{
       count: number;

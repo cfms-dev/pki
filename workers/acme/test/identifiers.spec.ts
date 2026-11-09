@@ -181,8 +181,8 @@ describe("new-order identifier enforcement", () => {
     expect(await countRows("authorizations")).toBe(0);
   });
 
-  it("keeps unsupportedIdentifier for 'ip' and unknown identifier types", async () => {
-    for (const type of ["ip", "email", "uri"]) {
+  it("keeps unsupportedIdentifier for unknown identifier types", async () => {
+    for (const type of ["email", "uri"]) {
       const result = await createOrder(env, account, [
         { type, value: type === "ip" ? "127.0.0.1" : "value" },
       ]);

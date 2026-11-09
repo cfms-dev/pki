@@ -1,7 +1,8 @@
 import "reflect-metadata";
+import { build } from "esbuild";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -13,6 +14,7 @@ const require = createRequire(import.meta.url);
 const { Miniflare, convertV4MiniflareOptions } = createRequire(require.resolve("wrangler"))("miniflare");
 const directory = await mkdtemp(path.join(tmpdir(), "cfms-pki-smoke-"));
 let runtime;
+let parserRuntime;
 try {
   execFileSync(process.execPath, ["node_modules/wrangler/bin/wrangler.js", "deploy", "--dry-run", "--outdir", directory], { stdio: "pipe", timeout: 60000 });
   const caKeys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
@@ -38,6 +40,7 @@ try {
       { type: "ESModule", path: path.join(directory, entry) },
       { type: "Text", path: path.join(directory, "manifest.json") },
       { type: "Text", path: path.join(directory, "generic-intermediate.pem") },
+      ...files.filter((file) => file.endsWith(".wasm")).map((file) => ({ type: "CompiledWasm", path: path.join(directory, file) })),
     ],
     compatibilityDate: "2026-11-05", compatibilityFlags: ["nodejs_compat"],
     assets: {
@@ -167,8 +170,93 @@ try {
   assert.equal(Date.parse(renewalBody.suggestedWindow.end) - Date.parse(renewalBody.suggestedWindow.start), 30 * 86400000);
   assert.equal(leaf.notAfter.getTime() - leaf.notBefore.getTime(), 90 * 86400000);
   assert.equal((await db.prepare("SELECT ca_id FROM certificates").first()).ca_id, "generic-intermediate");
-  console.log("Workers runtime smoke passed: Assets routing, database-free website, legacy D1 migration, bundled CA read, issuance, signature and CRL distribution point");
+
+  for (const identifiers of [
+    [{ type: "ip", value: "93.184.216.34" }],
+    [{ type: "ip", value: "2606:4700:4700::1111" }],
+    [{ type: "dns", value: "runtime.example.com" }, { type: "ip", value: "93.184.216.34" }],
+  ]) {
+    const response = await post(`${base}/new-order`, { identifiers });
+    assert.equal(response.status, 201, await response.clone().text());
+    const ipOrder = await response.json();
+    const authz = await post(ipOrder.authorizations[identifiers.length - 1], "");
+    assert.deepEqual((await authz.json()).challenges.map((item) => item.type), ["http-01"]);
+    await db.prepare("UPDATE authorizations SET status = 'valid'").run();
+    await db.prepare("UPDATE challenges SET status = 'valid'").run();
+    const csr = await x509.Pkcs10CertificateRequestGenerator.create({
+      name: "", keys: leafKeys, signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+      extensions: [new x509.SubjectAlternativeNameExtension(identifiers)],
+    });
+    const finalized = await post(ipOrder.finalize, { csr: b64(csr.rawData) });
+    assert.equal(finalized.status, 200, await finalized.clone().text());
+    const issued = await finalized.json();
+    const downloaded = await runtime.dispatchFetch(issued.certificate);
+    const leaf = new x509.X509Certificate((await downloaded.text()).match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)[0]);
+    assert.equal(leaf.notAfter.getTime() - leaf.notBefore.getTime(), 160 * 3600000);
+    assert.deepEqual(leaf.getExtension(x509.SubjectAlternativeNameExtension).names.items.map((item) => item.type), identifiers.map((item) => item.type));
+    assert.equal(await leaf.verify({ publicKey: ca.publicKey, signatureOnly: true }), true);
+    if (identifiers.every((item) => item.type === "ip")) {
+      assert.equal(leaf.subject, "");
+      assert.equal(leaf.getExtension(x509.SubjectAlternativeNameExtension).critical, true);
+    }
+  }
+
+  // Exercise the real socket adapter and strict parser in workerd, injecting
+  // only the TCP peer. No public probe host or production binding is involved.
+  const probe = await build({
+    absWorkingDir: process.cwd(), bundle: true, write: false, format: "esm", platform: "browser",
+    external: ["cloudflare:sockets", "node:net"],
+    plugins: [{ name: "runtime-wasm", setup(build) {
+      build.onResolve({ filter: /\.wasm$/ }, () => ({ path: "./llhttp.wasm", external: true }));
+    } }],
+    stdin: { resolveDir: process.cwd(), contents: `
+      import { validateHttp01Challenge } from './src/http01/validator';
+      export default { async fetch() {
+        const token = 'a'.repeat(22), thumbprint = 'b'.repeat(43), body = token + '.' + thumbprint;
+        const checks = [];
+        for (const ip of ['93.184.216.34', '2606:4700:4700::1111']) {
+          for (const valid of [true, false]) {
+            let destination, closed = false, request = '';
+            const connectImpl = (address) => {
+              destination = address;
+              const wire = valid ? 'HTTP/1.1 200 OK\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n' + body.length.toString(16) + '\\r\\n' + body + '\\r\\n0\\r\\n\\r\\n' : 'HTTP/1.1 200 OK\\r\\nContent-Length: 999\\r\\n\\r\\nx';
+              return {
+                opened: Promise.resolve({}), closed: new Promise(() => {}),
+                readable: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(wire)); c.close(); } }),
+                writable: new WritableStream({ write(bytes) { request += new TextDecoder().decode(bytes); } }),
+                close() { closed = true; return Promise.resolve(); }
+              };
+            };
+            const result = await validateHttp01Challenge({ type: 'ip', value: ip }, token, thumbprint, { connectImpl, fetchImpl: () => { throw new Error('unexpected fetch'); } });
+            checks.push({ ip, expected: valid, result, destination, closed, request });
+          }
+        }
+        return Response.json(checks);
+      } };
+    ` },
+  });
+  const wasmFile = files.find((file) => file.endsWith(".wasm"));
+  assert.ok(wasmFile, "Wrangler did not bundle llhttp WASM");
+  parserRuntime = new Miniflare(convertV4MiniflareOptions({
+    modulesRoot: directory,
+    modules: [
+      { type: "ESModule", path: path.join(directory, "parser-probe.mjs"), contents: probe.outputFiles[0].text },
+      { type: "CompiledWasm", path: path.join(directory, "llhttp.wasm"), contents: await readFile(path.join(directory, wasmFile)) },
+    ],
+    compatibilityDate: "2026-11-05", compatibilityFlags: ["nodejs_compat"],
+  }));
+  const checks = await (await parserRuntime.dispatchFetch("https://parser.runtime.test")).json();
+  for (const check of checks) {
+    assert.equal(check.result.valid, check.expected, JSON.stringify(check));
+    assert.equal(check.closed, true);
+    const authority = check.ip.includes(":") ? `[${check.ip}]` : check.ip;
+    assert.equal(check.destination, `${authority}:80`);
+    assert.ok(check.request.includes(`Host: ${authority}\r\n`));
+    if (!check.expected) assert.equal(check.result.errorType, "incorrectResponse");
+  }
+  console.log("Workers runtime smoke passed: Assets, legacy D1 migration, DNS/IPv4/IPv6/mixed issuance, signatures, validity, ARI, compiled llhttp WASM and socket parsing");
 } finally {
+  if (parserRuntime) await parserRuntime.dispose();
   if (runtime) await runtime.dispose();
   // directory comes exclusively from mkdtemp under the OS temp directory.
   assert.ok(directory.startsWith(path.join(tmpdir(), "cfms-pki-smoke-")));
