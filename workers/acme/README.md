@@ -9,6 +9,17 @@ weighted pool of intermediate CAs. Supported validation methods:
 The ACME directory is served at `/directory` (for production:
 `https://acme.cfms-pki.crpteam.club/directory`).
 
+The root `/` serves an English HTML service overview, independently of D1.
+Use `/directory`, rather than the homepage, as your ACME client's server URL.
+The homepage supports GET and HEAD; other methods return 405, with OPTIONS
+retaining the server's CORS preflight behavior.
+
+The standalone `src/routes/home.html` template contains the markup and inline
+styles. Wrangler imports it as a text module; `src/routes/home.ts` substitutes
+the escaped directory URL and configured CRL URL. There are no external assets
+or browser scripts. The Node test loader and runtime smoke test also load this
+HTML module.
+
 ## Identifier support
 
 | Identifier | Supported | Notes |
@@ -345,7 +356,7 @@ build and deployment. Environment variables do not override or merge with them.
 `CERT_VALIDITY_DAYS` and `RENEWAL_WINDOW_DAYS` are positive safe integer numbers,
 currently `90` and `30`. `ACME_BASE_URL` is empty by default, so published URLs
 use the request origin; set it in `CONFIG` to publish a fixed URL.
-`CRL_BASE_URL` is `https://cfms-pki.crpteam.club/crl`, and
+`CRL_BASE_URL` is `https://cfms-dev.github.io/pki/crl/`, and
 `ARI_EXPLANATION_URL` is
 `https://www.rfc-editor.org/rfc/rfc9773.html#section-4.2`.
 
@@ -514,7 +525,7 @@ performs a local D1 upgrade and certificate issuance with disposable CA material
 
 `CONFIG.CERT_VALIDITY_DAYS` and `CONFIG.RENEWAL_WINDOW_DAYS` must be positive
 safe integer day counts. The issuance interval is capped by the selected CA's expiration.
-`CONFIG.CRL_BASE_URL` is set to `https://cfms-pki.crpteam.club/crl`; newly issued
+`CONFIG.CRL_BASE_URL` is set to `https://cfms-dev.github.io/pki/crl/`; newly issued
 certificates include a per-CA CRL distribution point. No retroactive certificate
 extension changes are possible.
 

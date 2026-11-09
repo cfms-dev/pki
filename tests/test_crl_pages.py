@@ -32,30 +32,6 @@ def test_scan_crl_files_with_content(tmp_path: Path) -> None:
     assert results[1].sha256 == hashlib.sha256(b"mock crl content 1").hexdigest()
 
 
-def test_build_crl_pages_empty(tmp_path: Path) -> None:
-    crl_dir = tmp_path / "crl"
-    crl_dir.mkdir()
-    out_dir = tmp_path / "_site"
-
-    build_crl_pages(
-        crl_dir=crl_dir, output_dir=out_dir, generated_at="2026-11-04 12:00:00 UTC"
-    )
-
-    assert (out_dir / ".nojekyll").is_file()
-    assert (out_dir / "index.html").is_file()
-    assert (out_dir / "crl" / "index.html").is_file()
-
-    root_html = (out_dir / "index.html").read_text(encoding="utf-8")
-    assert "CFMS PKI CRL Distribution Point" in root_html
-    assert "No CRL files available." in root_html
-    assert "Generated at: 2026-11-04 12:00:00 UTC" in root_html
-    assert "← Back to Root" not in root_html
-
-    crl_html = (out_dir / "crl" / "index.html").read_text(encoding="utf-8")
-    assert "CFMS PKI CRL Directory" in crl_html
-    assert "← Back to Root" in crl_html
-
-
 def test_build_crl_pages_with_files(tmp_path: Path) -> None:
     crl_dir = tmp_path / "crl"
     crl_dir.mkdir()
@@ -74,15 +50,17 @@ def test_build_crl_pages_with_files(tmp_path: Path) -> None:
 
     # Check root page
     root_html = (out_dir / "index.html").read_text(encoding="utf-8")
-    assert 'href="crl/generic-intermediate.crl"' in root_html
-    assert expected_hash in root_html
-    assert f"{len(content):,} B" in root_html
-    assert "download" in root_html
+    assert 'href="crl/"' in root_html
+    assert "generic-intermediate.crl" not in root_html
+    assert "<table>" not in root_html
 
     # Check crl page
     crl_html = (out_dir / "crl" / "index.html").read_text(encoding="utf-8")
     assert 'href="generic-intermediate.crl"' in crl_html
     assert expected_hash in crl_html
+    assert f"{len(content):,} B" in crl_html
+    assert "download" in crl_html
+    assert "Generated at: 2026-11-04 12:00:00 UTC" in crl_html
 
 
 def test_build_crl_pages_custom_template(tmp_path: Path) -> None:
@@ -109,5 +87,18 @@ def test_build_crl_pages_custom_template(tmp_path: Path) -> None:
 
     root_html = (out_dir / "index.html").read_text(encoding="utf-8")
     assert (
-        "CUSTOM BASE: CUSTOM CONTENT FOR CFMS PKI CRL Distribution Point" in root_html
+        "CUSTOM BASE: CUSTOM CONTENT FOR CFMS PKI — Certificate Information"
+        in root_html
+    )
+    # The packaged directory template also inherits a custom base.
+    crl_html = (out_dir / "crl" / "index.html").read_text(encoding="utf-8")
+    assert "CUSTOM BASE:" in crl_html
+    assert 'href="test.crl"' in crl_html
+
+    (custom_templates / "crl.html").write_text(
+        "CUSTOM DIRECTORY: {{ crls[0].href }}", encoding="utf-8"
+    )
+    build_crl_pages(crl_dir=crl_dir, output_dir=out_dir, template_dir=custom_templates)
+    assert (out_dir / "crl" / "index.html").read_text(encoding="utf-8") == (
+        "CUSTOM DIRECTORY: test.crl"
     )

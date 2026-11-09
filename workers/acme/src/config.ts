@@ -15,7 +15,7 @@ export const CONFIG = {
   // undefined derives the published identity from CAA_ISSUER_DOMAIN_NAME; [] omits it.
   CAA_IDENTITIES: undefined as string[] | undefined,
   EXTERNAL_ACCOUNT_REQUIRED: false,
-  CRL_BASE_URL: "https://cfms-pki.crpteam.club/crl",
+  CRL_BASE_URL: "https://cfms-dev.github.io/pki/crl/",
 
   CERT_VALIDITY_DAYS: 90,
   RENEWAL_WINDOW_DAYS: 30,

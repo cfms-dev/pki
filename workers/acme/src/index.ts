@@ -5,6 +5,7 @@ import { AcmeError } from "./errors";
 import { createAndSaveNonce } from "./crypto/nonce";
 import { bindPublishedRequestUrl } from "./crypto/jws";
 import { handleDirectory } from "./routes/directory";
+import { handleHome } from "./routes/home";
 import { handleNewNonce } from "./routes/nonce";
 import { handleAccount, handleNewAccount } from "./routes/account";
 import { handleKeyChange } from "./routes/key-change";
@@ -50,14 +51,12 @@ export default {
       });
     }
 
-    // The directory endpoint never touches D1, so read-only discovery requests
-    // must not pay for schema initialization. Every other route initializes
-    // lazily on first use.
+    // The static homepage and read-only directory discovery never touch D1.
     const isDirectoryRead =
-      (path === "/" || path === "/directory") &&
+      path === "/directory" &&
       (request.method === "GET" || request.method === "HEAD");
     try {
-      if (!isDirectoryRead) await ensureSchema(database, env.DB);
+      if (path !== "/" && !isDirectoryRead) await ensureSchema(database, env.DB);
       const response = await routeRequest(request, path, database, baseUrl, env);
 
       // In RFC 8555 § 6.5.1, the server MUST include Replay-Nonce on POST responses
@@ -75,7 +74,7 @@ export default {
         "Link, Location, Replay-Nonce, Retry-After"
       );
 
-      if (request.method === "POST" && !headers.has("Replay-Nonce")) {
+      if (path !== "/" && request.method === "POST" && !headers.has("Replay-Nonce")) {
         const freshNonce = await createAndSaveNonce(database);
         headers.set("Replay-Nonce", freshNonce);
       }
@@ -121,8 +120,12 @@ async function routeRequest(
   baseUrl: string,
   env: AcmeEnv
 ): Promise<Response> {
+  if (path === "/") {
+    return handleHome(request, baseUrl);
+  }
+
   // Directory
-  if (path === "/directory" || path === "/") {
+  if (path === "/directory") {
     return handleDirectory(request, env, baseUrl);
   }
 

@@ -23,9 +23,11 @@ try {
     extensions: [new x509.BasicConstraintsExtension(true, 0, true), await x509.SubjectKeyIdentifierExtension.create(caKeys.publicKey)],
   });
   await writeFile(path.join(directory, "generic-intermediate.pem"), ca.toString("pem"));
-  await writeFile(path.join(directory, "manifest.json"), JSON.stringify({ cas: {
-    "generic-intermediate": { certFile: "generic-intermediate.pem", pkEnv: "PK_GENERIC_INTERMEDIATE" },
-  } }));
+  await writeFile(path.join(directory, "manifest.json"), JSON.stringify({
+    cas: {
+      "generic-intermediate": { certFile: "generic-intermediate.pem", pkEnv: "PK_GENERIC_INTERMEDIATE" },
+    }
+  }));
   const files = await readdir(directory);
   const entry = files.find((file) => file.endsWith(".js") && !file.endsWith(".map"));
   assert.ok(entry, "Wrangler did not emit a Worker");
@@ -34,6 +36,7 @@ try {
     modulesRoot: directory,
     modules: [
       { type: "ESModule", path: path.join(directory, entry) },
+      { type: "Text", path: path.join(directory, "home.html") },
       { type: "Text", path: path.join(directory, "manifest.json") },
       { type: "Text", path: path.join(directory, "generic-intermediate.pem") },
     ],
@@ -46,6 +49,18 @@ try {
     },
   }));
   const base = "https://acme.runtime.test";
+  const home = await runtime.dispatchFetch(`${base}/`);
+  assert.equal(home.status, 200);
+  assert.equal(home.headers.get("Content-Type"), "text/html; charset=utf-8");
+  assert.equal(home.headers.get("Link"), `<${base}/directory>;rel="index"`);
+  const homeHtml = await home.text();
+  assert.ok(homeHtml.includes("Certificate issuance,"));
+  assert.ok(homeHtml.includes(`href="${base}/directory"`));
+  assert.ok(!homeHtml.includes("{{DIRECTORY_URL}}"));
+  const homeHead = await runtime.dispatchFetch(`${base}/`, { method: "HEAD" });
+  assert.equal(homeHead.status, 200);
+  assert.equal(homeHead.headers.get("Content-Type"), home.headers.get("Content-Type"));
+  assert.equal(await homeHead.text(), "");
   const discovery = await runtime.dispatchFetch(`${base}/directory`);
   assert.equal(discovery.status, 200);
   const directoryBody = await discovery.json();
@@ -92,7 +107,7 @@ try {
   assert.equal(await leaf.verify({ publicKey: ca.publicKey, signatureOnly: true }), true);
   assert.equal(leaf.getExtension(x509.CRLDistributionPointsExtension)
     ?.distributionPoints[0].distributionPoint?.fullName?.[0].uniformResourceIdentifier,
-    "https://cfms-pki.crpteam.club/crl/generic-intermediate.crl");
+    "https://cfms-dev.github.io/pki/crl/generic-intermediate.crl");
   const certificate = await db.prepare("SELECT cert_id FROM certificates").first();
   const renewal = await runtime.dispatchFetch(`${base}/renewal-info/${certificate.cert_id}`);
   assert.equal(renewal.status, 200);

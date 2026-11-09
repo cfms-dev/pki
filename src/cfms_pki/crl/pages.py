@@ -96,7 +96,7 @@ def build_crl_pages(
     env = get_template_environment(template_dir)
     template = env.get_template("index.html")
 
-    # Render root index.html (links pointing into crl/<name>)
+    # Keep file metadata available to custom homepage templates.
     root_crls = [
         {
             "name": f.name,
@@ -107,8 +107,8 @@ def build_crl_pages(
         for f in crl_files
     ]
     root_html = template.render(
-        title="CFMS PKI CRL Distribution Point",
-        desc="Official Certificate Revocation List (CRL) distribution point for the CFMS PKI infrastructure.<br>CRLs are automatically generated and renewed via GitHub Actions.",
+        title="CFMS PKI — Certificate Information",
+        desc="Certificate infrastructure, automated issuance and revocation list distribution for the CFMS ecosystem.",
         crls=root_crls,
         is_crl_subdir=False,
         generated_at=now_utc,
@@ -125,9 +125,9 @@ def build_crl_pages(
         }
         for f in crl_files
     ]
-    crl_html = template.render(
+    crl_html = env.get_template("crl.html").render(
         title="CFMS PKI CRL Directory",
-        desc="Index of all active Certificate Revocation Lists in <code>/pki/crl/</code>.",
+        desc="Download published CFMS PKI certificate revocation lists and compare SHA-256 checksums.",
         crls=crl_crls,
         is_crl_subdir=True,
         generated_at=now_utc,

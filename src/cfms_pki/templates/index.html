@@ -1,33 +1,28 @@
 {% extends "base.html" %}
 
 {% block content %}
-  {% if is_crl_subdir %}
-  <p class="nav-back"><a href="../">← Back to Root</a></p>
-  {% endif %}
-  <h1>{{ title }}</h1>
-  <p class="desc">{{ desc|safe }}</p>
-  <table>
-    <thead>
-      <tr>
-        <th>CRL File</th>
-        <th>Size</th>
-        <th>SHA-256 Checksum</th>
-        <th>Action</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for crl in crls %}
-      <tr>
-        <td><a href="{{ crl.href }}"><code>{{ crl.name }}</code></a></td>
-        <td>{{ crl.size }}</td>
-        <td><code class="hash">{{ crl.sha256 }}</code></td>
-        <td><a href="{{ crl.href }}" class="btn" download>Download</a></td>
-      </tr>
-      {% else %}
-      <tr>
-        <td colspan="4" class="empty">No CRL files available.</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <section class="hero" aria-labelledby="page-title">
+    <p class="eyebrow">Certificate information &amp; distribution</p>
+    <h1 id="page-title">Public key infrastructure.<br>Clearly delivered.</h1>
+    <p class="lead">CFMS PKI manages certificate authorities, automated certificate issuance and revocation information for the CFMS ecosystem. This site distributes its certificate revocation lists.</p>
+  </section>
+  <section class="endpoint" aria-labelledby="crl-label">
+    <h2 class="eyebrow" id="crl-label">Certificate revocation lists</h2>
+    <a href="crl/">Browse the CRL directory <span aria-hidden="true">→</span></a>
+    <p>Download published CRL files, view their sizes and compare SHA-256 checksums. Existing direct file addresses remain available for certificate validation software.</p>
+  </section>
+  <div class="details">
+    <section aria-labelledby="revocation-title">
+      <p class="eyebrow">01 / Revocation information</p>
+      <h2 id="revocation-title">Know when a certificate is revoked.</h2>
+      <p>A certificate revocation list (CRL) is a signed record of certificates revoked by their issuing authority before their expiry date.</p>
+      <p>Certificate validation software can retrieve a CRL using the distribution point recorded in a certificate. Published lists are generated and renewed automatically.</p>
+    </section>
+    <section aria-labelledby="issuance-title">
+      <p class="eyebrow">02 / Automated issuance</p>
+      <h2 id="issuance-title">Request and renew with ACME.</h2>
+      <p>Use an ACME-compatible client to request certificates for domains you control. Start with the service overview for domain validation and client connection details.</p>
+      <a href="https://acme.cfms-pki.crpteam.club/">Explore the ACME service <span aria-hidden="true">→</span></a>
+    </section>
+  </div>
 {% endblock %}

@@ -7,9 +7,6 @@
 
 A lightweight, GitOps-driven PKI toolkit and stateless CRL distribution system for the CFMS ecosystem.
 
-Security updates, database migration, ACME revocation export, and production
-verification are documented in the [security rollout runbook](docs/security-rollout.md).
-
 CFMS-PKI provides automated X.509 CA management and certificate revocation list (CRL) distribution without the overhead of heavy database infrastructure. It pairs declarative GitOps workflows with modern cryptography to ensure reliable, zero-maintenance PKI operations.
 
 ### Key Features
