@@ -1,5 +1,6 @@
 import { CAA_ISSUER_DOMAIN_NAME, getCaaIssuerDomainName, AcmeEnv } from "../config";
 import { AcmeError } from "../errors";
+import { dnsBudget, DnsBudget, normalizeDnsTarget, queryDns } from "./doh";
 
 export interface CaaRecord {
   flags: number;
@@ -87,13 +88,14 @@ export function parseCaaRecord(raw: string): CaaRecord | null {
     if (tokens.length >= 3) {
       try {
         const hex = tokens.slice(2).join("");
+        if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2 || Number(tokens[1]) !== hex.length / 2) return null;
         const hexMatches = hex.match(/../g);
         if (hexMatches) {
           const bytes = new Uint8Array(hexMatches.map((h) => parseInt(h, 16)));
           if (bytes.length >= 2) {
             const flags = bytes[0];
             const tagLen = bytes[1];
-            if (bytes.length >= 2 + tagLen) {
+            if (tagLen > 0 && bytes.length >= 2 + tagLen) {
               const tag = new TextDecoder().decode(bytes.slice(2, 2 + tagLen)).toLowerCase();
               const valStr = new TextDecoder().decode(bytes.slice(2 + tagLen));
               const { issuerDomain, parameters } = parseCaaValue(valStr);
@@ -111,6 +113,7 @@ export function parseCaaRecord(raw: string): CaaRecord | null {
   if (!match) return null;
 
   const flags = parseInt(match[1], 10);
+  if (flags > 255) return null;
   const tag = match[2].toLowerCase();
   let valueStr = match[3].trim();
 
@@ -272,59 +275,22 @@ export function evaluateCaaRecords(
  */
 export async function queryDohCaa(
   domain: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  budget: DnsBudget = dnsBudget()
 ): Promise<DohCaaResponse> {
-  const providers = [
-    `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=CAA`,
-    `https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=CAA`,
-  ];
-
-  let lastStatus = 0;
-
-  for (const url of providers) {
-    try {
-      const resp = await fetchImpl(url, {
-        headers: { Accept: "application/dns-json" },
-      });
-      if (!resp.ok) continue;
-
-      const data = (await resp.json()) as {
-        Status?: number;
-        Answer?: Array<{ type: number; data: string; name?: string }>;
-      };
-
-      lastStatus = data.Status ?? 0;
-
-      const records: CaaRecord[] = [];
-      let cnameTarget: string | undefined;
-
-      if (Array.isArray(data.Answer)) {
-        for (const ans of data.Answer) {
-          if (ans.type === 257 && ans.data) {
-            const parsed = parseCaaRecord(ans.data);
-            if (parsed) {
-              records.push(parsed);
-            }
-          } else if (ans.type === 5 && ans.data) {
-            // CNAME record
-            let target = ans.data.trim();
-            if (target.startsWith('"') && target.endsWith('"')) {
-              target = target.slice(1, -1);
-            }
-            cnameTarget = target.replace(/\.+$/, "").toLowerCase();
-          }
-        }
-      }
-
-      if (records.length > 0 || cnameTarget || lastStatus === 3 || lastStatus === 0) {
-        return { records, cnameTarget, status: lastStatus };
-      }
-    } catch {
-      // Continue to next provider
+  const data = await queryDns(domain, "CAA", fetchImpl, budget);
+  const records: CaaRecord[] = [];
+  let cnameTarget: string | undefined;
+  for (const answer of data.Answer) {
+    if (answer.type === 257) {
+      const parsed = parseCaaRecord(answer.data);
+      if (!parsed) throw new AcmeError("dns", "Malformed CAA record");
+      records.push(parsed);
+    } else if (answer.type === 5) {
+      cnameTarget = normalizeDnsTarget(answer.data);
     }
   }
-
-  return { records: [], status: lastStatus };
+  return { records, cnameTarget, status: data.Status };
 }
 
 /**
@@ -342,8 +308,9 @@ export async function findRelevantCaaRecordSet(
   const cleanDomain = domain.startsWith("*.") ? domain.slice(2) : domain;
   let current: string = cleanDomain.toLowerCase().replace(/\.+$/, "");
 
+  const budget = dnsBudget();
   while (current.length > 0) {
-    const resp = await queryDohCaa(current, fetchImpl);
+    const resp = await queryDohCaa(current, fetchImpl, budget);
     if (resp.records.length > 0) {
       return { domain: current, records: resp.records };
     }
@@ -352,18 +319,23 @@ export async function findRelevantCaaRecordSet(
     if (resp.cnameTarget) {
       let cnameDomain: string = resp.cnameTarget;
       let hops = 0;
+      const visited = new Set([current]);
       while (cnameDomain && hops < 8) {
+        if (visited.has(cnameDomain)) throw new AcmeError("dns", "CAA alias cycle");
+        visited.add(cnameDomain);
         hops++;
-        const cnameResp = await queryDohCaa(cnameDomain, fetchImpl);
+        const cnameResp = await queryDohCaa(cnameDomain, fetchImpl, budget);
         if (cnameResp.records.length > 0) {
           return { domain: cnameDomain, records: cnameResp.records };
         }
         if (cnameResp.cnameTarget) {
           cnameDomain = cnameResp.cnameTarget;
         } else {
+          cnameDomain = "";
           break;
         }
       }
+      if (hops >= 8 && cnameDomain) throw new AcmeError("dns", "CAA alias limit exceeded");
     }
 
     // Climb to parent domain

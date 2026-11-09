@@ -188,7 +188,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
     it("should parse RFC 3597 presentation format hex data", () => {
       // 00 05 6973737565 (issue) 63666d732d706b692e6372707465616d2e636c7562 (cfms-pki.crpteam.club)
       const hex = "0005697373756563666d732d706b692e6372707465616d2e636c7562";
-      const parsed = parseCaaRecord(`\\# 27 ${hex}`);
+      const parsed = parseCaaRecord(`\\# ${hex.length / 2} ${hex}`);
       expect(parsed).not.toBeNull();
       expect(parsed!.flags).toBe(0);
       expect(parsed!.tag).toBe("issue");

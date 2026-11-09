@@ -1,3 +1,5 @@
+import { dnsBudget, normalizeDnsTarget, queryDns } from "./doh";
+import { AcmeError } from "../errors";
 import { base64UrlEncode } from "../crypto/nonce";
 
 export interface DnsValidationResult {
@@ -49,40 +51,20 @@ export async function resolveTxtRecords(
   hostname: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<string[]> {
-  const records: string[] = [];
-  const providers = [
-    `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=TXT`,
-    `https://dns.google/resolve?name=${encodeURIComponent(hostname)}&type=TXT`,
-  ];
-
-  for (const url of providers) {
-    try {
-      const resp = await fetchImpl(url, {
-        headers: { Accept: "application/dns-json" },
-      });
-      if (!resp.ok) continue;
-
-      const data = (await resp.json()) as {
-        Status?: number;
-        Answer?: Array<{ type: number; data: string }>;
-      };
-
-      if (data.Status === 0 && Array.isArray(data.Answer)) {
-        for (const ans of data.Answer) {
-          if (ans.type === 16 && ans.data) {
-            records.push(cleanTxtRecord(ans.data));
-          }
-        }
-      }
-      if (records.length > 0) {
-        break; // Successfully got records from provider
-      }
-    } catch {
-      // Continue to next provider
-    }
+  const budget = dnsBudget();
+  const visited = new Set<string>();
+  let current = normalizeDnsTarget(hostname);
+  for (let hop = 0; hop <= 8; hop++) {
+    if (visited.has(current)) throw new AcmeError("dns", "TXT alias cycle");
+    visited.add(current);
+    const response = await queryDns(current, "TXT", fetchImpl, budget);
+    const records = response.Answer.filter((answer) => answer.type === 16).map((answer) => cleanTxtRecord(answer.data));
+    if (records.length) return records;
+    const alias = response.Answer.find((answer) => answer.type === 5);
+    if (!alias) return [];
+    current = normalizeDnsTarget(alias.data);
   }
-
-  return records;
+  throw new AcmeError("dns", "TXT alias limit exceeded");
 }
 
 /**
