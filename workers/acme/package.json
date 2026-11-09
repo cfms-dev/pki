@@ -12,7 +12,7 @@
     "build:website": "node scripts/build-website.mjs",
     "build": "npm run build:cas && npm run build:llhttp && npm run build:website",
     "generate:types": "wrangler types",
-    "pretypecheck": "npm run generate:types",
+    "pretypecheck": "npm run build && npm run generate:types",
     "typecheck": "tsc --noEmit",
     "pretest": "npm run build",
     "test": "vitest run",

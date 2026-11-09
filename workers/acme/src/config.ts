@@ -51,7 +51,7 @@ export const CONFIG = {
   RATE_LIMIT_FAILED_WINDOW_SECONDS: 3600,
 
   // Intermediate CA Directory & Selection Configuration
-  CA_DIR: "cas",                         // Designated directory for bundled intermediate CA certs
+  CA_DIR: "generated/cas",               // Designated directory for bundled intermediate CA certs
 
   // Excluded CA identifiers from issuance (configured in config.ts)
   EXCLUDED_CA_IDS: [] as string[],       // e.g. ["legacy-ca"]

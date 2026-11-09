@@ -5,7 +5,7 @@ import { vi } from "vitest";
 /** Replace only the requested bundled certificate; all other files stay real. */
 export function mockCaCertificate(pem: string, certFile = "generic-intermediate.pem") {
   const readFileSync = fs.readFileSync.bind(fs);
-  const localFile = path.resolve("cas", certFile);
+  const localFile = path.resolve("generated/cas", certFile);
   const bundleFile = path.posix.join("/bundle", certFile);
   const fixture = { pem };
   vi.spyOn(fs, "readFileSync").mockImplementation((...args: Parameters<typeof fs.readFileSync>) => {

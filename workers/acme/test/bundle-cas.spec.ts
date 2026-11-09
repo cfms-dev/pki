@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const certificate = fs.readFileSync("cas/generic-intermediate.pem", "utf-8");
+const certificate = fs.readFileSync("generated/cas/generic-intermediate.pem", "utf-8");
 
 describe("CA packaging", () => {
   let repoDir: string;
@@ -14,7 +14,7 @@ describe("CA packaging", () => {
   beforeEach(() => {
     repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "cfms-ca-bundle-"));
     script = path.join(repoDir, "workers/acme/scripts/bundle-cas.mjs");
-    outputDir = path.join(repoDir, "workers/acme/cas");
+    outputDir = path.join(repoDir, "workers/acme/generated/cas");
     fs.mkdirSync(path.dirname(script), { recursive: true });
     fs.copyFileSync("scripts/bundle-cas.mjs", script);
     fs.mkdirSync(path.join(repoDir, "registry"));

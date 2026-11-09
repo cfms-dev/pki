@@ -8,7 +8,7 @@ import { loadCaRegistry, readCaCertPem, selectIntermediateCa } from "../src/cryp
 import { createMockD1Database } from "./mock-d1";
 
 const ca = { id: "test-ca", certFile: "test-ca.pem", pkEnv: "PK_TEST", weight: 1 };
-const certPem = fs.readFileSync("cas/generic-intermediate.pem", "utf-8").trim();
+const certPem = fs.readFileSync("generated/cas/generic-intermediate.pem", "utf-8").trim();
 
 describe("CA loading", () => {
   let caDir: string;

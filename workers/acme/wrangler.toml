@@ -4,7 +4,7 @@ compatibility_date = "2026-11-05"
 compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
 find_additional_modules = true
 preserve_file_names = true
-base_dir = "cas"
+base_dir = "generated/cas"
 
 [triggers]
 crons = ["*/5 * * * *"]

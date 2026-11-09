@@ -1,4 +1,4 @@
-import wasmModule from "../../cas/llhttp-module";
+import wasmModule from "../../generated/llhttp/llhttp-module";
 
 export class HttpResponseError extends Error {}
 

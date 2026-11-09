@@ -49,9 +49,8 @@ web_modules/
 *.tsbuildinfo
 worker-configuration.d.ts
 
-# Bundled intermediate CA artifacts generated at deployment/build time
-acme/cas/*
-!acme/cas/.gitkeep
+# CA and llhttp artifacts generated at deployment/build time
+acme/generated/
 
 # Optional npm cache directory
 .npm

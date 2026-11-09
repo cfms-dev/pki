@@ -10,7 +10,7 @@ export default defineConfig({
     },
     load(id) {
       if (id === "\0llhttp-compiled-test") {
-        return `export default new WebAssembly.Module(Uint8Array.from(${JSON.stringify([...readFileSync(new URL("./cas/llhttp.wasm", import.meta.url))])}));`;
+        return `export default new WebAssembly.Module(Uint8Array.from(${JSON.stringify([...readFileSync(new URL("./generated/llhttp/llhttp.wasm", import.meta.url))])}));`;
       }
     },
   }],

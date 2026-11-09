@@ -12,7 +12,7 @@ const exports = new Set(WebAssembly.Module.exports(module).map((item) => item.na
 for (const name of ["memory", "_initialize", "malloc", "free", "llhttp_alloc", "llhttp_free", "llhttp_execute", "llhttp_finish", "llhttp_get_status_code", "llhttp_get_http_major", "llhttp_get_http_minor", "llhttp_get_upgrade"]) {
   if (!exports.has(name)) throw new Error(`Missing llhttp export: ${name}`);
 }
-const directory = new URL("../cas/", import.meta.url);
+const directory = new URL("../generated/llhttp/", import.meta.url);
 await mkdir(directory, { recursive: true });
 // Unchanged outputs must not retrigger Wrangler's additional-module watcher.
 async function writeArtifact(name, content) {

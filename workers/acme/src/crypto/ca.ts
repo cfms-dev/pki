@@ -30,7 +30,7 @@ function validateCaFileName(fileName: string): void {
 function readCaFile(fileName: string, caDir: string): string {
   validateCaFileName(fileName);
 
-  // Wrangler bundles files from base_dir = "cas" under their original names.
+  // Wrangler bundles files from base_dir = "generated/cas" under their original names.
   const filePath = fs.existsSync("/bundle")
     ? path.posix.join("/bundle", fileName)
     : path.resolve(caDir, fileName);

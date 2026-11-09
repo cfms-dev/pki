@@ -29,8 +29,11 @@ Source templates are never overwritten. `CONFIG.CRL_BASE_URL` supplies the
 English CRL directory link; its parent supplies the PKI overview root and
 localized browsing links (for example, `/pki/crl/` gives `/pki/` and
 `/pki/zh-cn/crl/`). Change that setting and rebuild/redeploy to update links.
-`npm run build` builds both CA assets and the website; Wrangler runs it before
-local development, type generation and deployment, including dry runs.
+`npm run build` creates CA certificates and their manifest in `generated/cas/`,
+llhttp WASM and its supporting files in `generated/llhttp/`, and the website in
+`dist/website/`. These outputs are ignored by Git and recreated by the build;
+no placeholder directories are required. Wrangler runs the build before local
+development, type generation and deployment, including dry runs.
 
 The homepage always displays and links `/directory`, resolved by the browser
 against the current site. It does not inspect `ACME_BASE_URL` or infer an ACME
@@ -77,8 +80,8 @@ platform-blocked destinations can still fail with a `connection` problem.
 The socket response is parsed by strict llhttp WASM. `build:llhttp` extracts the
 unmodified module from the pinned official `undici@8.12.4` build dependency;
 Undici's HTTP client and runtime loader are not included. Wrangler statically
-imports a precompiled module through a generated shim in `cas/`. Each socket
-uses its own parser instance. See [provenance and ABI notes](src/http01/LLHTTP.md).
+imports a precompiled module through a generated shim in `generated/llhttp/`.
+Each socket uses its own parser instance. See [provenance and ABI notes](src/http01/LLHTTP.md).
 
 Orders and certificate SAN metadata now store typed identifier arrays.
 Historical DNS string arrays remain readable. The idempotent D1 schema upgrade
@@ -387,9 +390,10 @@ Optional metadata URLs are trimmed and omitted when empty.
 not add EAB enforcement. Terms of service are disabled by default with an empty
 `TERMS_OF_SERVICE_URL`.
 
-`CA_DIR: "cas"` is the local certificate-read directory and must match the
-existing build convention. The bundler writes `cas`, Wrangler bundles that
-folder, and Workers read the manifest and public certificates from `/bundle`.
+`CA_DIR: "generated/cas"` is the local certificate-read directory and must match
+the CA build output and Wrangler's `base_dir`. Wrangler scans only that folder
+for additional modules; llhttp WASM is included through its explicit import.
+Workers read the manifest and public certificates from the root of `/bundle`.
 The manifest is generated, not a second place to edit CA registration.
 CA public certificates cannot be replaced by environment bindings.
 
@@ -423,9 +427,9 @@ used to extract llhttp WASM; run the complete build before tests or deployment.
 ## Tests
 
 ```bash
-npm test          # vitest, includes HTTP-01 unit + integration suites
-npm run typecheck # wrangler types + tsc --noEmit
-npm run build     # bundle CA assets
+npm test          # build + vitest, includes HTTP-01 unit + integration suites
+npm run typecheck # build + wrangler types + tsc --noEmit
+npm run build     # generate CA and llhttp assets + build the website
 ```
 
 Relevant suites: `test/http01-validator.spec.ts` (protocol/SSRF/timeout/redirect/

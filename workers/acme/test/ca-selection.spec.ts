@@ -15,7 +15,7 @@ import { base64UrlEncode } from "../src/crypto/nonce";
 
 describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
   it("should dynamically load CA registry and read certificate from designated directory", () => {
-    const registry = loadCaRegistry("cas");
+    const registry = loadCaRegistry("generated/cas");
     expect(registry.length).toBeGreaterThan(0);
 
     const genericCa = registry.find((ca) => ca.id === "generic-intermediate");
@@ -24,7 +24,7 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
     expect(genericCa!.pkEnv).toBe("PK_GENERIC_INTERMEDIATE");
 
     // Attempt to read certificate PEM from designated directory
-    const certPem = readCaCertPem(genericCa!, "cas");
+    const certPem = readCaCertPem(genericCa!, "generated/cas");
     expect(certPem).toContain("-----BEGIN CERTIFICATE-----");
     expect(certPem).toContain("-----END CERTIFICATE-----");
 
@@ -40,7 +40,7 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
       weight: 1,
     };
 
-    expect(() => readCaCertPem(nonExistentCa, "cas")).toThrowError(
+    expect(() => readCaCertPem(nonExistentCa, "generated/cas")).toThrowError(
       /Failed to read Intermediate CA certificate for 'ghost-ca'/
     );
   });

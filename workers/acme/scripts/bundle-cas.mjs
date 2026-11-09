@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
-const targetDir = fileURLToPath(new URL("../cas/", import.meta.url));
+const targetDir = fileURLToPath(new URL("../generated/cas/", import.meta.url));
 const registryPath = path.join(repoRoot, "registry/ca.json");
 const { cas } = JSON.parse(fs.readFileSync(registryPath, "utf-8"));
 
