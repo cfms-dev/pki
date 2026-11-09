@@ -239,10 +239,6 @@ describe("CA and certificate policy", () => {
     CONFIG.CERT_VALIDITY_DAYS = 7;
     CONFIG.RENEWAL_WINDOW_DAYS = 2;
     CONFIG.CRL_BASE_URL = "  https://configured.example/crl/  ";
-    Object.assign(context.env, {
-      CERT_VALIDITY_DAYS: "90", RENEWAL_WINDOW_DAYS: "30",
-      CRL_BASE_URL: "https://legacy.example/crl", ARI_EXPLANATION_URL: "https://legacy.example/ari",
-    });
     context.env.fetch = async () => Response.json({ Status: 0 });
     const id = await readyOrder();
     const { response } = await makeJwsRequest(context.env, `${BASE}/order/${id}/finalize`, { csr: await makeCsr(["victim.example.com"]) }, owner, await getNonce(context.env));

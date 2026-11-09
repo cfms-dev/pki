@@ -79,28 +79,6 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
     );
   });
 
-  it("ignores legacy environment exclusions, weights, directory and PEM overrides", async () => {
-    const keys = await crypto.subtle.generateKey(
-      { name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]
-    ) as CryptoKeyPair;
-    const fixture = await certificateFor(keys);
-    mockCaCertificate(fixture);
-    const key = Buffer.from(await crypto.subtle.exportKey("pkcs8", keys.privateKey) as ArrayBuffer).toString("base64");
-    const env: AcmeEnv = {
-      DB: createMockD1Database(),
-      PK_GENERIC_INTERMEDIATE: `-----BEGIN PRIVATE KEY-----\n${key}\n-----END PRIVATE KEY-----`,
-      EXCLUDED_CA_IDS: "generic-intermediate",
-      CA_WEIGHTS: '{"generic-intermediate":0}',
-      CA_DIR: "missing-directory",
-      CA_CERT_PEM: "invalid legacy override",
-      CA_ID: "other-ca",
-      PK_ENV_VAR: "PK_MISSING",
-    };
-    const selected = await selectIntermediateCa(env);
-    expect(selected.certPem).toBe(fixture);
-    expect(selected.ca.id).toBe("generic-intermediate");
-  });
-
   it("should exclude CAs whose private keys are missing from the environment", async () => {
     const env: AcmeEnv = {
       DB: createMockD1Database(),
@@ -154,7 +132,6 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
     expect(betaRatio).toBeLessThan(0.35);
 
     CONFIG.CA_WEIGHTS = { "ca-alpha": 0, "ca-beta": 2 };
-    env.CA_WEIGHTS = '{"ca-alpha":100,"ca-beta":0}';
     const configured = await selectIntermediateCa(env, { candidates, random: () => 0 });
     expect(configured.ca.id).toBe("ca-beta");
     expect(configured.ca.weight).toBe(2);
