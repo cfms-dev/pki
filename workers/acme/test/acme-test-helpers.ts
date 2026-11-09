@@ -1,3 +1,4 @@
+import { testAssets } from "./website-test-helpers";
 import { mockCaCertificate } from "./ca-test-helpers";
 import * as x509 from "@peculiar/x509";
 import worker from "../src/index";
@@ -73,6 +74,7 @@ export async function createTestEnvironment(): Promise<TestEnvironment> {
 
   const caFixture = mockCaCertificate(ca.certPem);
   const env: AcmeEnv = {
+    ASSETS: testAssets,
     DB: d1,
     PK_GENERIC_INTERMEDIATE: ca.keyPem,
   };

@@ -14,11 +14,27 @@ Use `/directory`, rather than the homepage, as your ACME client's server URL.
 The homepage supports GET and HEAD; other methods return 405, with OPTIONS
 retaining the server's CORS preflight behavior.
 
-The standalone `src/routes/home.html` template contains the markup and inline
-styles. Wrangler imports it as a text module; `src/routes/home.ts` substitutes
-the escaped directory URL and configured CRL URL. There are no external assets
-or browser scripts. The Node test loader and runtime smoke test also load this
-HTML module.
+Web assets live in `public/`: `index.html`, `terms.html`, `privacy.html` and
+`styles.css`. Wrangler's `[assets]` configuration binds this directory as
+`ASSETS`, with `run_worker_first = true` and `html_handling = "none"`.
+`src/routes/website.ts` handles these requests before database initialization;
+CSS and image requests (including missing files) also stay independent of D1.
+
+The homepage is read through `ASSETS.fetch()` and rendered with escaped,
+runtime-configured directory and CRL links. It retains its five-minute public
+cache policy; source asset validators are removed from the rendered response.
+`/index.html` redirects to `/`. The policy pages use `/terms.html` and
+`/privacy.html`, with shared styles at `/styles.css`. There are no browser
+scripts. Website failures do not generate an ACME nonce or access D1.
+
+Publishing the terms page does not itself enable ACME consent enforcement.
+`CONFIG.TERMS_OF_SERVICE_URL` remains empty by default. Set it to the absolute
+URL of the applicable terms to advertise it in `/directory` and activate the
+existing consent checks for account registration and continued ordering.
+Use a new URL when the applicable terms change: consent records identify the
+agreed version by URL. Keep previously published versions available if needed.
+The policy text describes the current implementation; update it when service
+practices change.
 
 ## Identifier support
 

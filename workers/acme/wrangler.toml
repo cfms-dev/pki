@@ -7,6 +7,12 @@ find_additional_modules = true
 preserve_file_names = true
 base_dir = "cas"
 
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+html_handling = "none"
+
 [build]
 command = "node scripts/bundle-cas.mjs"
 

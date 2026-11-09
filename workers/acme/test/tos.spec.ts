@@ -1,3 +1,4 @@
+import { testAssets } from "./website-test-helpers";
 import { mockCaCertificate } from "./ca-test-helpers";
 import { describe, it, expect, beforeEach } from "vitest";
 import worker from "../src/index";
@@ -47,6 +48,7 @@ describe("RFC 8555 termsOfService and Optional Directory Fields", () => {
 
     mockCaCertificate(caCertPem);
     env = {
+      ASSETS: testAssets,
       DB: d1,
       PK_GENERIC_INTERMEDIATE: caKeyPem,
     };
@@ -122,7 +124,7 @@ describe("RFC 8555 termsOfService and Optional Directory Fields", () => {
     it("should omit termsOfService by default when unspecified", async () => {
       const resp = handleDirectory(
         new Request("https://acme.test/directory"),
-        { DB: createMockD1Database() },
+        { ASSETS: testAssets, DB: createMockD1Database() },
         "https://acme.test"
       );
       expect(resp.status).toBe(200);
@@ -135,7 +137,7 @@ describe("RFC 8555 termsOfService and Optional Directory Fields", () => {
       CONFIG.TERMS_OF_SERVICE_URL = "  https://example.com/tos-2026  ";
       const resp = handleDirectory(
         new Request("https://acme.test/directory"),
-        { DB: createMockD1Database() },
+        { ASSETS: testAssets, DB: createMockD1Database() },
         "https://acme.test"
       );
       expect(resp.status).toBe(200);
@@ -147,7 +149,7 @@ describe("RFC 8555 termsOfService and Optional Directory Fields", () => {
       CONFIG.WEBSITE_URL = "  ";
       const resp = handleDirectory(
         new Request("https://acme.test/directory"),
-        { DB: createMockD1Database() },
+        { ASSETS: testAssets, DB: createMockD1Database() },
         "https://acme.test"
       );
       expect(resp.status).toBe(200);
@@ -159,7 +161,7 @@ describe("RFC 8555 termsOfService and Optional Directory Fields", () => {
       CONFIG.CAA_IDENTITIES = [];
       const resp = handleDirectory(
         new Request("https://acme.test/directory"),
-        { DB: createMockD1Database() },
+        { ASSETS: testAssets, DB: createMockD1Database() },
         "https://acme.test"
       );
       expect(resp.status).toBe(200);
@@ -170,7 +172,7 @@ describe("RFC 8555 termsOfService and Optional Directory Fields", () => {
     it("should omit externalAccountRequired by default and include true when set", async () => {
       const respDefault = handleDirectory(
         new Request("https://acme.test/directory"),
-        { DB: createMockD1Database() },
+        { ASSETS: testAssets, DB: createMockD1Database() },
         "https://acme.test"
       );
       const dataDefault = (await respDefault.json()) as { meta?: Record<string, unknown> };
@@ -179,7 +181,7 @@ describe("RFC 8555 termsOfService and Optional Directory Fields", () => {
       CONFIG.EXTERNAL_ACCOUNT_REQUIRED = true;
       const respTrue = handleDirectory(
         new Request("https://acme.test/directory"),
-        { DB: createMockD1Database() },
+        { ASSETS: testAssets, DB: createMockD1Database() },
         "https://acme.test"
       );
       const dataTrue = (await respTrue.json()) as { meta: { externalAccountRequired?: boolean } };
@@ -193,6 +195,7 @@ describe("RFC 8555 termsOfService and Optional Directory Fields", () => {
       const resp = handleDirectory(
         new Request("https://acme.test/directory"),
         {
+          ASSETS: testAssets,
           DB: createMockD1Database(),
         },
         "https://acme.test"

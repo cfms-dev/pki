@@ -5,7 +5,7 @@ import { AcmeError } from "./errors";
 import { createAndSaveNonce } from "./crypto/nonce";
 import { bindPublishedRequestUrl } from "./crypto/jws";
 import { handleDirectory } from "./routes/directory";
-import { handleHome } from "./routes/home";
+import { handleWebsite, isWebsitePath } from "./routes/website";
 import { handleNewNonce } from "./routes/nonce";
 import { handleAccount, handleNewAccount } from "./routes/account";
 import { handleKeyChange } from "./routes/key-change";
@@ -36,7 +36,6 @@ export default {
     const baseUrl = CONFIG.ACME_BASE_URL.trim() || url.origin;
     bindPublishedRequestUrl(request, baseUrl);
     const path = url.pathname.replace(/\/+$/, "") || "/";
-    const database = new Database(env.DB);
 
     // CORS preflight does not touch the database.
     if (request.method === "OPTIONS") {
@@ -51,12 +50,15 @@ export default {
       });
     }
 
-    // The static homepage and read-only directory discovery never touch D1.
+    if (isWebsitePath(path)) return handleWebsite(request, path, env, baseUrl);
+
+    const database = new Database(env.DB);
+    // Read-only directory discovery never touches D1.
     const isDirectoryRead =
       path === "/directory" &&
       (request.method === "GET" || request.method === "HEAD");
     try {
-      if (path !== "/" && !isDirectoryRead) await ensureSchema(database, env.DB);
+      if (!isDirectoryRead) await ensureSchema(database, env.DB);
       const response = await routeRequest(request, path, database, baseUrl, env);
 
       // In RFC 8555 § 6.5.1, the server MUST include Replay-Nonce on POST responses
@@ -74,7 +76,7 @@ export default {
         "Link, Location, Replay-Nonce, Retry-After"
       );
 
-      if (path !== "/" && request.method === "POST" && !headers.has("Replay-Nonce")) {
+      if (request.method === "POST" && !headers.has("Replay-Nonce")) {
         const freshNonce = await createAndSaveNonce(database);
         headers.set("Replay-Nonce", freshNonce);
       }
@@ -120,10 +122,6 @@ async function routeRequest(
   baseUrl: string,
   env: AcmeEnv
 ): Promise<Response> {
-  if (path === "/") {
-    return handleHome(request, baseUrl);
-  }
-
   // Directory
   if (path === "/directory") {
     return handleDirectory(request, env, baseUrl);

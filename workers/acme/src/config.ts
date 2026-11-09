@@ -1,6 +1,7 @@
 // Non-sensitive settings are owned here. Environment bindings supply resources and secrets only.
 export interface AcmeEnv {
   DB: D1Database;
+  ASSETS: Fetcher;
   fetch?: typeof fetch;
   // Private-key binding names come from registry/ca.json via the bundled manifest.
   [binding: string]: unknown;
