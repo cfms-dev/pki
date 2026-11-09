@@ -103,6 +103,25 @@ export class AcmeError extends Error {
     return new AcmeError("badCSR", detail, 400);
   }
 
+  static badPublicKey(detail = "The public key is not acceptable"): AcmeError {
+    return new AcmeError("badPublicKey", detail, 400);
+  }
+
+  /**
+   * RFC 8555 § 7.3.5: when the requested new key already belongs to an
+   * existing account, respond with 409 and the URL of that account.
+   */
+  static keyAlreadyInUse(detail: string, accountUrl: string): AcmeError {
+    return new AcmeError(
+      "malformed",
+      detail,
+      409,
+      undefined,
+      undefined,
+      { Location: accountUrl }
+    );
+  }
+
   static orderNotReady(detail = "Order is not ready for finalization"): AcmeError {
     return new AcmeError("orderNotReady", detail, 403);
   }

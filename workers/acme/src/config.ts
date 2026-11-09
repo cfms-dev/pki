@@ -6,6 +6,7 @@ export interface AcmeEnv {
   CERT_VALIDITY_DAYS?: string;
   RENEWAL_WINDOW_DAYS?: string;
   CA_DIR?: string;
+  CRL_BASE_URL?: string;
   CA_ID?: string;
   PK_ENV_VAR?: string;
   EXCLUDED_CA_IDS?: string; // Comma-separated list of CA identifiers to exclude
@@ -158,3 +159,12 @@ export const CONFIG = {
   DEFAULT_CA_ID: "generic-intermediate",
   DEFAULT_PK_ENV_VAR: "PK_GENERIC_INTERMEDIATE",
 };
+
+/** Positive whole-day configuration; invalid deployment settings fail closed. */
+export function configuredDays(value: unknown, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw new Error("Invalid day configuration");
+  const result = Number(value);
+  if (!Number.isSafeInteger(result)) throw new Error("Invalid day configuration");
+  return result;
+}

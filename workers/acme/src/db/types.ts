@@ -4,10 +4,30 @@ export interface AccountRow {
   id: string;
   jwk: string; // JSON string of account JWK
   thumbprint: string; // RFC 7638 SHA-256 base64url thumbprint
+  /**
+   * base64url(SHA-256(canonical SubjectPublicKeyInfo DER)) of the actual
+   * account public key. Unlike `thumbprint`, this is stable across legal JWK
+   * encodings and is the identity used by cross-account key-reuse checks.
+   * NULL only for legacy rows whose one-time backfill has not completed.
+   */
+  public_key_fingerprint?: string | null;
   contact: string | null; // JSON string array of contact URLs
   status: "valid" | "deactivated" | "revoked";
   created_at: number; // unix timestamp seconds
   terms_of_service?: string | null; // Agreed terms of service URL
+}
+
+/**
+ * A legacy account whose public key could not be indexed, or an account that
+ * shares an actual public key with another account. These rows are
+ * administrator-facing only; they never contain private key material.
+ */
+export interface AccountKeyConflictRow {
+  account_id: string;
+  reason: string;
+  public_key_fingerprint: string | null;
+  conflicting_account_id: string | null;
+  detected_at: number;
 }
 
 export interface OrderRow {
@@ -22,6 +42,8 @@ export interface OrderRow {
   created_at: number;
   expires_at: number;
   certificate_id: string | null;
+  processing_started_at?: number | null;
+  finalize_generation?: number;
 }
 
 export interface AuthorizationRow {
@@ -54,6 +76,7 @@ export interface ChallengeRow {
 }
 
 export interface CertificateRow {
+  ca_id?: string | null;
   id: string;
   cert_id: string; // RFC 9773 certID: Base64URL(AKI) + "." + Base64URL(Serial)
   serial_number: string; // Hex or integer string

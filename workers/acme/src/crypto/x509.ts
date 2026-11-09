@@ -4,15 +4,13 @@ import { AcmeEnv, CONFIG } from "../config";
 import { AcmeError } from "../errors";
 import { isValidDnsIdentifier } from "../acme/identifiers";
 import { base64UrlDecode } from "./nonce";
-import { calculateJwkThumbprint } from "./jws";
+import { derivePublicKeyIdentityFromCryptoKey } from "./jws";
 import { bytesToHex, computeCertId } from "../ari/cert-id";
 import {
-  importCaPrivateKey,
   SelectedIntermediateCa,
   selectIntermediateCa,
 } from "./ca";
 
-export { importCaPrivateKey };
 
 export interface ParsedCsr {
   csr: x509.Pkcs10CertificateRequest;
@@ -22,6 +20,8 @@ export interface ParsedCsr {
   publicKeySpki: Uint8Array;
   /** RFC 7638 SHA-256 JWK thumbprint of the CSR public key. */
   publicKeyThumbprint: string;
+  /** base64url(SHA-256(canonical SPKI DER)) — the actual public key identity. */
+  publicKeyFingerprint: string;
 }
 
 export interface IssuedCertificate {
@@ -44,6 +44,8 @@ export interface PublicKeyIdentity {
   publicKeySpki: Uint8Array;
   /** RFC 7638 SHA-256 JWK thumbprint of the public key. */
   publicKeyThumbprint: string;
+  /** base64url(SHA-256(canonical SPKI DER)) — the actual public key identity. */
+  publicKeyFingerprint: string;
 }
 
 /**
@@ -60,12 +62,12 @@ export async function derivePublicKeyIdentity(
 ): Promise<PublicKeyIdentity> {
   try {
     const cryptoKey = await publicKey.export();
-    const spki = (await crypto.subtle.exportKey("spki", cryptoKey)) as ArrayBuffer;
-    const jwk = (await crypto.subtle.exportKey("jwk", cryptoKey)) as JsonWebKey;
+    const identity = await derivePublicKeyIdentityFromCryptoKey(cryptoKey);
     return {
-      publicKey: cryptoKey,
-      publicKeySpki: new Uint8Array(spki),
-      publicKeyThumbprint: await calculateJwkThumbprint(jwk),
+      publicKey: identity.cryptoKey,
+      publicKeySpki: identity.spki,
+      publicKeyThumbprint: identity.thumbprint,
+      publicKeyFingerprint: identity.fingerprint,
     };
   } catch (error: unknown) {
     throw AcmeError.badCSR(
@@ -147,29 +149,13 @@ export async function parseAndVerifyCsr(csrBase64Url: string): Promise<ParsedCsr
 }
 
 /**
- * Loads the CA private key from the environment
- */
-export async function loadCaPrivateKey(env: AcmeEnv, pkVarName?: string): Promise<CryptoKey> {
-  const varName = pkVarName || env.PK_ENV_VAR || CONFIG.DEFAULT_PK_ENV_VAR;
-  const pkPem = env[varName] as string | undefined;
-
-  if (!pkPem || typeof pkPem !== "string" || pkPem.trim() === "") {
-    throw AcmeError.serverInternal(
-      `CA private key missing: environment variable ${varName} is not set or empty`
-    );
-  }
-
-  return importCaPrivateKey(pkPem);
-}
-
-/**
  * Generates a random 160-bit serial number as a hex string
  */
 export function generateRandomSerialNumberHex(): string {
   const bytes = new Uint8Array(20);
   crypto.getRandomValues(bytes);
-  // Ensure the highest bit is not 0 to maintain length
-  bytes[0] = bytes[0] | 0x01;
+  bytes[0] &= 0x7f;
+  if (bytes.every((byte) => byte === 0)) bytes[19] = 1;
   return bytesToHex(bytes);
 }
 
@@ -181,7 +167,8 @@ export async function issueCertificateFromCsr(
   authorizedDomains: string[],
   env: AcmeEnv,
   validityDays = CONFIG.DEFAULT_CERT_VALIDITY_DAYS,
-  explicitCa?: SelectedIntermediateCa
+  explicitCa?: SelectedIntermediateCa,
+  requested?: { notBefore: number | null; notAfter: number | null }
 ): Promise<IssuedCertificate> {
   const selected = explicitCa || (await selectIntermediateCa(env));
   const caCertPem = selected.certPem;
@@ -189,13 +176,20 @@ export async function issueCertificateFromCsr(
   const caPrivateKey = selected.privateKey;
 
   const now = new Date();
-  const notBefore = now;
-  const notAfter = new Date(now.getTime() + validityDays * 86400 * 1000);
+  const notBefore = requested?.notBefore ? new Date(requested.notBefore * 1000) : now;
+  const maximumEnd = Math.min(notBefore.getTime() + validityDays * 86400 * 1000, caCert.notAfter.getTime());
+  const notAfter = requested?.notAfter ? new Date(requested.notAfter * 1000) : new Date(maximumEnd);
+  if (notBefore < caCert.notBefore || notBefore >= caCert.notAfter || notAfter <= notBefore || notAfter.getTime() > maximumEnd || notAfter <= now) {
+    throw AcmeError.badCSR("Requested certificate validity exceeds issuer validity or policy");
+  }
 
   const serialHex = generateRandomSerialNumberHex();
 
   // Create AKI & SKI
-  const akiExt = await x509.AuthorityKeyIdentifierExtension.create(caCert.publicKey);
+  const issuerSki = caCert.getExtension(x509.SubjectKeyIdentifierExtension)?.keyId;
+  const akiExt = issuerSki
+    ? new x509.AuthorityKeyIdentifierExtension(issuerSki)
+    : await x509.AuthorityKeyIdentifierExtension.create(caCert.publicKey);
   const skiExt = await x509.SubjectKeyIdentifierExtension.create(csr.publicKey);
 
   // SAN entries are built exclusively from the already-authorized order
@@ -216,6 +210,9 @@ export async function issueCertificateFromCsr(
     new x509.SubjectAlternativeNameExtension(sanNames),
     skiExt,
     akiExt,
+    new x509.CRLDistributionPointsExtension([
+      `${(env.CRL_BASE_URL || "https://cfms-pki.crpteam.club/crl").replace(/\/$/, "")}/${encodeURIComponent(selected.ca.crlFile || `${selected.ca.id}.crl`)}`,
+    ]),
   ];
 
   const signingAlg =
@@ -238,6 +235,9 @@ export async function issueCertificateFromCsr(
   });
 
   const leafPem = leafCert.toString("pem");
+  if (!await leafCert.verify({ publicKey: caCert.publicKey, signatureOnly: true })) {
+    throw AcmeError.serverInternal("Issued certificate signature verification failed");
+  }
   const chainPem = `${leafPem}\n${caCertPem}`;
 
   const akiHex = akiExt.keyId || "";

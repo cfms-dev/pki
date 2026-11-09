@@ -47,7 +47,9 @@ for (const [id, ca] of Object.entries(cas)) {
   }
 
   writeIfChanged(path.join(targetDir, certFile), pem);
-  manifest.cas[id] = { certFile, pkEnv: ca.pk_env };
+  const crlFile = path.basename(ca.crl_path || `${id}.crl`);
+  if (!/^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*\.crl$/.test(crlFile) || crlFile.includes("..")) throw new Error("Invalid CRL filename");
+  manifest.cas[id] = { certFile, pkEnv: ca.pk_env, crlFile };
 }
 
 writeIfChanged(path.join(targetDir, "manifest.json"), JSON.stringify(manifest, null, 2));

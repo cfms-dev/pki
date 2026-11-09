@@ -1,6 +1,7 @@
 name = "pki"
 main = "src/index.ts"
 compatibility_date = "2026-11-05"
+compatibility_flags = ["nodejs_compat"]
 
 find_additional_modules = true
 preserve_file_names = true

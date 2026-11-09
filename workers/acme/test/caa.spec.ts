@@ -1,3 +1,4 @@
+import { migrateAccountPublicKeyFingerprints } from "../src/db/account-keys";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as x509 from "@peculiar/x509";
 import { CAA_ISSUER_DOMAIN_NAME, CONFIG, AcmeEnv, getCaaIssuerDomainName } from "../src/config";
@@ -732,6 +733,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
       url: string,
       payload: Record<string, unknown>
     ): Promise<Request> {
+      await migrateAccountPublicKeyFingerprints(database);
       const nonce = crypto.randomUUID();
       await database.saveNonce(nonce, Math.floor(Date.now() / 1000) + 300);
 

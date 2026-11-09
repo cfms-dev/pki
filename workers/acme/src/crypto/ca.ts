@@ -4,10 +4,12 @@ import "reflect-metadata";
 import * as x509 from "@peculiar/x509";
 import { AcmeEnv, CONFIG } from "../config";
 import { AcmeError } from "../errors";
+import { assertStrongPublicKey } from "./jws";
 
 export interface IntermediateCaEntry {
   id: string;
   certFile: string;
+  crlFile?: string;
   pkEnv: string;
   weight: number;
 }
@@ -149,7 +151,12 @@ export function loadCaRegistry(caDir = CONFIG.CA_DIR): IntermediateCaEntry[] {
       throw AcmeError.serverInternal(`Invalid Intermediate CA registry entry '${id}': expected certFile and pkEnv`);
     }
     validateCaFileName(entry.certFile);
-    return { id, certFile: entry.certFile, pkEnv: entry.pkEnv, weight: 1 };
+    if (entry.crlFile !== undefined) {
+      if (typeof entry.crlFile !== "string") throw AcmeError.serverInternal("Invalid CRL filename");
+      validateCaFileName(entry.crlFile);
+    }
+    return { id, certFile: entry.certFile, pkEnv: entry.pkEnv, weight: 1,
+      ...(entry.crlFile === undefined ? {} : { crlFile: entry.crlFile }) };
   });
 }
 
@@ -375,6 +382,18 @@ export async function selectIntermediateCa(
   // Import private key
   const pkPem = env[chosen.pkEnv] as string;
   const privateKey = await importCaPrivateKey(pkPem);
+  const algorithm = privateKey.algorithm.name === "ECDSA"
+    ? { name: "ECDSA", hash: "SHA-256" }
+    : { name: privateKey.algorithm.name };
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  const signature = await crypto.subtle.sign(algorithm, privateKey, challenge);
+  const publicKey = await chosen.cert.publicKey.export(
+    privateKey.algorithm, ["verify"]
+  );
+  assertStrongPublicKey(publicKey);
+  if (!await crypto.subtle.verify(algorithm, publicKey, signature, challenge)) {
+    throw AcmeError.serverInternal("CA private key does not match the configured certificate");
+  }
 
   return {
     ca: chosen,

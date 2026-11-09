@@ -3,9 +3,11 @@ import { AcmeEnv } from "./config";
 import { Database } from "./db/queries";
 import { AcmeError } from "./errors";
 import { createAndSaveNonce } from "./crypto/nonce";
+import { bindPublishedRequestUrl } from "./crypto/jws";
 import { handleDirectory } from "./routes/directory";
 import { handleNewNonce } from "./routes/nonce";
 import { handleAccount, handleNewAccount } from "./routes/account";
+import { handleKeyChange } from "./routes/key-change";
 import { handleFinalizeOrder, handleGetOrder, handleNewOrder } from "./routes/order";
 import { handleGetAuthz } from "./routes/authz";
 import { handleChallenge } from "./routes/challenge";
@@ -13,17 +15,14 @@ import { handleGetCertificate } from "./routes/certificate";
 import { handleRevokeCert } from "./routes/revoke";
 import { handleRenewalInfo } from "./routes/ari";
 
-let schemaInit: Promise<void> | null = null;
-
-function ensureSchema(database: Database): Promise<void> {
-  if (!schemaInit) {
-    schemaInit = database.initSchema().catch((error: unknown) => {
-      // Allow a later request to retry schema initialization.
-      schemaInit = null;
-      throw error;
-    });
+const schemaInit = new WeakMap<D1Database, Promise<void>>();
+function ensureSchema(database: Database, binding: D1Database): Promise<void> {
+  let pending = schemaInit.get(binding);
+  if (!pending) {
+    pending = database.initSchema().catch((error: unknown) => { schemaInit.delete(binding); throw error; });
+    schemaInit.set(binding, pending);
   }
-  return schemaInit;
+  return pending;
 }
 
 export default {
@@ -34,6 +33,7 @@ export default {
   ): Promise<Response> {
     const url = new URL(request.url);
     const baseUrl = env.ACME_BASE_URL || url.origin;
+    bindPublishedRequestUrl(request, baseUrl);
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const database = new Database(env.DB);
 
@@ -56,15 +56,8 @@ export default {
     const isDirectoryRead =
       (path === "/" || path === "/directory") &&
       (request.method === "GET" || request.method === "HEAD");
-    if (!isDirectoryRead) {
-      try {
-        await ensureSchema(database);
-      } catch {
-        // Continue; initialization is retried on the next request.
-      }
-    }
-
     try {
+      if (!isDirectoryRead) await ensureSchema(database, env.DB);
       const response = await routeRequest(request, path, database, baseUrl, env);
 
       // In RFC 8555 § 6.5.1, the server MUST include Replay-Nonce on POST responses
@@ -112,8 +105,11 @@ export default {
         return err.toResponse(extraHeaders);
       }
 
-      const message = err instanceof Error ? err.message : String(err);
-      return AcmeError.serverInternal(message).toResponse(extraHeaders);
+      // Log a correlation ID, never arbitrary exception strings that may
+      // contain request bodies, JWKs, PEMs or bound database parameters.
+      const errorId = crypto.randomUUID();
+      console.error(JSON.stringify({ event: "acme_internal_error", errorId, path, name: err instanceof Error ? err.name : "UnknownError" }));
+      return AcmeError.serverInternal(`Internal server error (${errorId})`).toResponse(extraHeaders);
     }
   },
 };
@@ -139,6 +135,12 @@ async function routeRequest(
   if (path === "/new-account") {
     if (request.method !== "POST") return methodNotAllowed();
     return await handleNewAccount(request, database, baseUrl, env);
+  }
+
+  // Account Key Rollover (RFC 8555 § 7.3.5)
+  if (path === "/key-change") {
+    if (request.method !== "POST") return methodNotAllowed();
+    return await handleKeyChange(request, database, baseUrl);
   }
 
   // Account

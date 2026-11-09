@@ -9,9 +9,32 @@ CREATE TABLE IF NOT EXISTS accounts (
     id TEXT PRIMARY KEY,
     jwk TEXT NOT NULL,
     thumbprint TEXT UNIQUE NOT NULL,
+    public_key_fingerprint TEXT, -- base64url(SHA-256(canonical SPKI DER)); NULL only for un-migrated legacy rows
     contact TEXT,
     status TEXT NOT NULL, -- 'valid', 'deactivated', 'revoked'
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    terms_of_service TEXT
+);
+
+-- SQLite UNIQUE indexes permit multiple NULLs, so this can be created before
+-- the legacy fingerprint backfill runs. It is the authoritative concurrency
+-- guard against registering the same actual public key twice.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_public_key_fingerprint
+    ON accounts (public_key_fingerprint);
+
+-- Keeps the per-request "is the legacy backfill complete?" probe cheap.
+CREATE INDEX IF NOT EXISTS idx_accounts_missing_public_key_fingerprint
+    ON accounts (id) WHERE public_key_fingerprint IS NULL;
+
+-- Administrator-facing record of legacy accounts that could not be indexed
+-- (invalid JWK or a duplicated actual public key). No private key material is
+-- stored here.
+CREATE TABLE IF NOT EXISTS account_key_conflicts (
+    account_id TEXT PRIMARY KEY,
+    reason TEXT NOT NULL,
+    public_key_fingerprint TEXT,
+    conflicting_account_id TEXT,
+    detected_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS orders (
@@ -25,7 +48,9 @@ CREATE TABLE IF NOT EXISTS orders (
     is_ari_renewal INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL,
-    certificate_id TEXT
+    certificate_id TEXT,
+    processing_started_at INTEGER,
+    finalize_generation INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS authorizations (
@@ -66,7 +91,8 @@ CREATE TABLE IF NOT EXISTS certificates (
     created_at INTEGER NOT NULL,
     revoked_at INTEGER,
     revocation_reason TEXT,
-    replaced_by_cert_id TEXT
+    replaced_by_cert_id TEXT,
+    ca_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS rate_limits (

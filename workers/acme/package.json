@@ -16,7 +16,8 @@
     "pretest": "npm run build:cas",
     "test": "vitest run",
     "dev": "wrangler dev --types",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "migrate:account-keys": "node scripts/migrate-account-keys.mjs"
   },
   "dependencies": {
     "@peculiar/x509": "^3.1.0",
@@ -26,6 +27,7 @@
     "@types/node": "^26.6.6",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0",
-    "wrangler": "^4.157.0"
+    "wrangler": "^4.157.0",
+    "esbuild": "^0.28.2"
   }
 }

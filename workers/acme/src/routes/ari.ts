@@ -1,4 +1,4 @@
-import { AcmeEnv, CONFIG } from "../config";
+import { AcmeEnv, CONFIG, configuredDays } from "../config";
 import { Database } from "../db/queries";
 import { AcmeError } from "../errors";
 import { computeSuggestedWindow } from "../ari/window";
@@ -20,7 +20,7 @@ export async function handleRenewalInfo(
 
   const suggestedWindow = computeSuggestedWindow(
     cert,
-    CONFIG.DEFAULT_RENEWAL_WINDOW_DAYS
+    configuredDays(env?.RENEWAL_WINDOW_DAYS, CONFIG.DEFAULT_RENEWAL_WINDOW_DAYS)
   );
 
   const explanationURL =

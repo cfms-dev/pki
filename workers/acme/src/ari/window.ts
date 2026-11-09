@@ -48,7 +48,8 @@ export function computeSuggestedWindow(
 export function checkAriRenewalEligibility(
   predecessorCert: CertificateRow,
   requestedDomains: string[],
-  now = Math.floor(Date.now() / 1000)
+  now = Math.floor(Date.now() / 1000),
+  renewalWindowDays = CONFIG.DEFAULT_RENEWAL_WINDOW_DAYS
 ): { eligible: boolean; reason?: string } {
   // 1. Check if predecessor has already been replaced
   if (predecessorCert.replaced_by_cert_id) {
@@ -83,7 +84,7 @@ export function checkAriRenewalEligibility(
   }
 
   // Otherwise, current time must be on or after suggestedWindow.start
-  const window = computeSuggestedWindow(predecessorCert, CONFIG.DEFAULT_RENEWAL_WINDOW_DAYS, now);
+  const window = computeSuggestedWindow(predecessorCert, renewalWindowDays, now);
   const windowStartSec = Math.floor(new Date(window.start).getTime() / 1000);
 
   if (now < windowStartSec) {

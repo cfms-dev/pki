@@ -9,9 +9,13 @@ export function createMockD1Database(): D1Database {
     },
     async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
       const results: D1Result<T>[] = [];
-      for (const stmt of statements) {
-        results.push(await (stmt as unknown as { run(): Promise<D1Result<T>> }).run());
-      }
+      db.exec("BEGIN");
+      try {
+        for (const stmt of statements) {
+          results.push(await (stmt as unknown as { run(): Promise<D1Result<T>> }).run());
+        }
+        db.exec("COMMIT");
+      } catch (error) { db.exec("ROLLBACK"); throw error; }
       return results;
     },
     async exec(query: string): Promise<D1ExecResult> {

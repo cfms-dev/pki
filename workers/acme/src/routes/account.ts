@@ -1,5 +1,10 @@
 import { AcmeEnv, getTermsOfServiceUrl } from "../config";
-import { verifyAcmeJws } from "../crypto/jws";
+import {
+  normalizePublicKey,
+  PublicKeyIdentityError,
+  verifyAcmeJws,
+} from "../crypto/jws";
+import { ensureAccountPublicKeyIndex } from "../db/account-keys";
 import { Database } from "../db/queries";
 import { AccountRow } from "../db/types";
 import { AcmeError } from "../errors";
@@ -8,6 +13,44 @@ interface NewAccountPayload {
   contact?: string[];
   termsOfServiceAgreed?: boolean;
   onlyReturnExisting?: boolean;
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /UNIQUE constraint failed/i.test(message) ||
+    /SQLITE_CONSTRAINT_UNIQUE/i.test(message)
+  );
+}
+
+/**
+ * Returns an existing account object and applies the RFC 8555 § 7.3.3 terms
+ * handling. Account ID, URL, status, contact, and all related resources are
+ * left untouched.
+ */
+async function respondWithExistingAccount(
+  existing: AccountRow,
+  payload: NewAccountPayload,
+  database: Database,
+  baseUrl: string,
+  termsOfServiceUrl: string | undefined
+): Promise<Response> {
+  // RFC 8555 § 7.3 & § 7.3.3:
+  // "The server MUST NOT require agreement to the terms of service on this request unless the terms of service have changed."
+  if (termsOfServiceUrl && existing.terms_of_service !== termsOfServiceUrl) {
+    if (payload.termsOfServiceAgreed === true) {
+      await database.updateAccount(existing.id, {
+        terms_of_service: termsOfServiceUrl,
+      });
+      existing.terms_of_service = termsOfServiceUrl;
+    } else {
+      throw AcmeError.userActionRequired(
+        "Terms of service have changed",
+        termsOfServiceUrl
+      );
+    }
+  }
+  return formatAccountResponse(existing, baseUrl, 200);
 }
 
 export async function handleNewAccount(
@@ -26,38 +69,57 @@ export async function handleNewAccount(
     throw AcmeError.malformed("newAccount request must include jwk in protected header");
   }
 
-  const termsOfServiceUrl = getTermsOfServiceUrl(env);
+  // The JWS signature was verified over the submitted JWK. Normalize the same
+  // key into the canonical actual-key identity before any account lookup or
+  // insert. Two legal encodings of one key therefore map to one account.
+  let publicKeyFingerprint: string;
+  try {
+    publicKeyFingerprint = (
+      await normalizePublicKey(verified.header.jwk, verified.header.alg)
+    ).fingerprint;
+  } catch (error: unknown) {
+    if (error instanceof PublicKeyIdentityError) {
+      throw AcmeError.badPublicKey(
+        "The account public key is malformed or uses an unsupported key type"
+      );
+    }
+    throw AcmeError.badPublicKey("The account public key could not be normalized");
+  }
 
-  // Check if account with this thumbprint already exists
-  const existing = await database.getAccountByThumbprint(verified.thumbprint);
+  // Fail closed if any legacy account public key has not been indexed yet.
+  // Otherwise an equivalent key could be registered a second time.
+  await ensureAccountPublicKeyIndex(database);
+
+  let existing: AccountRow | null;
+  try {
+    existing = await database.getAccountByPublicKeyFingerprint(
+      publicKeyFingerprint
+    );
+  } catch {
+    throw AcmeError.serverInternal("Account lookup failed");
+  }
+
+  const termsOfServiceUrl = getTermsOfServiceUrl(env);
 
   if (verified.payload.onlyReturnExisting) {
     if (!existing) {
       throw new AcmeError(
         "accountDoesNotExist",
         "No account exists for the provided key",
-        404
+        400
       );
     }
     return formatAccountResponse(existing, baseUrl, 200);
   }
 
   if (existing) {
-    // RFC 8555 § 7.3 & § 7.3.3:
-    // "The server MUST NOT require agreement to the terms of service on this request unless the terms of service have changed."
-    if (termsOfServiceUrl && existing.terms_of_service !== termsOfServiceUrl) {
-      if (verified.payload.termsOfServiceAgreed === true) {
-        existing.terms_of_service = termsOfServiceUrl;
-        await database.updateAccount(existing.id, { terms_of_service: termsOfServiceUrl });
-      } else {
-        throw AcmeError.userActionRequired(
-          "Terms of service have changed",
-          termsOfServiceUrl
-        );
-      }
-    }
-    // Return existing account per RFC 8555 § 7.3.1
-    return formatAccountResponse(existing, baseUrl, 200);
+    return respondWithExistingAccount(
+      existing,
+      verified.payload,
+      database,
+      baseUrl,
+      termsOfServiceUrl
+    );
   }
 
   // Create new account
@@ -74,15 +136,52 @@ export async function handleNewAccount(
   const now = Math.floor(Date.now() / 1000);
   const newAccount: AccountRow = {
     id: accountId,
-    jwk: JSON.stringify(verified.jwk),
+    // Store the JWK representation the client used to sign this request. The
+    // RFC 7638 thumbprint is computed from exactly this representation, so
+    // existing/new key authorizations remain consistent with the stored key.
+    jwk: JSON.stringify(verified.header.jwk),
     thumbprint: verified.thumbprint,
+    public_key_fingerprint: publicKeyFingerprint,
     contact: verified.payload.contact ? JSON.stringify(verified.payload.contact) : null,
     status: "valid",
     created_at: now,
     terms_of_service: verified.payload.termsOfServiceAgreed === true ? (termsOfServiceUrl || "true") : null,
   };
 
-  await database.saveAccount(newAccount);
+  try {
+    await database.saveAccount(newAccount);
+  } catch (error: unknown) {
+    if (!isUniqueConstraintError(error)) {
+      // Never reflect the underlying D1/SQLite error to the ACME client.
+      throw AcmeError.serverInternal("Account registration failed");
+    }
+
+    // A concurrent registration created the same actual key first. The
+    // UNIQUE index is authoritative: return that account per RFC 8555
+    // § 7.3.1 instead of creating a duplicate.
+    let raced: AccountRow | null = null;
+    try {
+      raced = await database.getAccountByPublicKeyFingerprint(
+        publicKeyFingerprint
+      );
+      if (!raced) {
+        raced = await database.getAccountByThumbprint(verified.thumbprint);
+      }
+    } catch {
+      throw AcmeError.serverInternal("Account registration was not completed");
+    }
+    if (!raced) {
+      throw AcmeError.serverInternal("Account registration was not completed");
+    }
+    return respondWithExistingAccount(
+      raced,
+      verified.payload,
+      database,
+      baseUrl,
+      termsOfServiceUrl
+    );
+  }
+
   return formatAccountResponse(newAccount, baseUrl, 201);
 }
 

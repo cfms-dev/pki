@@ -70,6 +70,7 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
       DB: createMockD1Database(),
       CA_DIR: "cas",
       PK_GENERIC_INTERMEDIATE: pkPem,
+      CA_CERT_PEM: await certificateFor(keys),
     };
 
     const selected = await selectIntermediateCa(env);
@@ -118,20 +119,14 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
   });
 
   it("should perform weighted random selection across multiple candidate CAs", async () => {
-    // Generate two mock CAs
+    // Candidate IDs share a matching fixture CA; this test isolates weighting.
     const caAKeys = (await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
       ["sign", "verify"]
     )) as CryptoKeyPair;
-    const caBKeys = (await crypto.subtle.generateKey(
-      { name: "ECDSA", namedCurve: "P-256" },
-      true,
-      ["sign", "verify"]
-    )) as CryptoKeyPair;
-
     const caAPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from((await crypto.subtle.exportKey("pkcs8", caAKeys.privateKey)) as ArrayBuffer).toString("base64")}\n-----END PRIVATE KEY-----`;
-    const caBPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from((await crypto.subtle.exportKey("pkcs8", caBKeys.privateKey)) as ArrayBuffer).toString("base64")}\n-----END PRIVATE KEY-----`;
+
 
     const candidates: IntermediateCaEntry[] = [
       { id: "ca-alpha", certFile: "generic-intermediate.pem", pkEnv: "PK_ALPHA", weight: 3 }, // 75%
@@ -142,7 +137,8 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
       DB: createMockD1Database(),
       CA_DIR: "cas",
       PK_ALPHA: caAPkPem,
-      PK_BETA: caBPkPem,
+      PK_BETA: caAPkPem,
+      CA_CERT_PEM: await certificateFor(caAKeys),
     };
 
     let alphaCount = 0;
@@ -265,3 +261,12 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
     );
   });
 });
+
+async function certificateFor(keys: CryptoKeyPair): Promise<string> {
+  return (await x509.X509CertificateGenerator.createSelfSigned({
+    serialNumber: "1234", name: "CN=Test CA", keys,
+    notBefore: new Date(Date.now() - 1000), notAfter: new Date(Date.now() + 86400000),
+    signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+    extensions: [new x509.BasicConstraintsExtension(true, undefined, true)],
+  })).toString("pem");
+}

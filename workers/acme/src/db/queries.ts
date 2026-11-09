@@ -6,6 +6,22 @@ import {
   OrderRow,
 } from "./types";
 
+export function isUniqueIndexSql(sql: string | null | undefined): boolean {
+  return typeof sql === "string" && /^\s*CREATE\s+UNIQUE\s+INDEX\b/i.test(sql);
+}
+
+export function isAccountFingerprintIndexSql(
+  sql: string | null | undefined
+): boolean {
+  return (
+    isUniqueIndexSql(sql) &&
+    typeof sql === "string" &&
+    /\bON\s+["`\[]?accounts["`\]]?\s*\(\s*["`\[]?public_key_fingerprint["`\]]?\s*\)\s*;?\s*$/i.test(sql) &&
+    // A partial UNIQUE index would not constrain every account.
+    !/\bWHERE\b/i.test(sql)
+  );
+}
+
 export class Database {
   constructor(private db: D1Database) {}
 
@@ -22,6 +38,7 @@ export class Database {
             id TEXT PRIMARY KEY,
             jwk TEXT NOT NULL,
             thumbprint TEXT UNIQUE NOT NULL,
+            public_key_fingerprint TEXT,
             contact TEXT,
             status TEXT NOT NULL,
             created_at INTEGER NOT NULL,
@@ -40,7 +57,9 @@ export class Database {
             is_ari_renewal INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
             expires_at INTEGER NOT NULL,
-            certificate_id TEXT
+            certificate_id TEXT,
+            processing_started_at INTEGER,
+            finalize_generation INTEGER NOT NULL DEFAULT 0
         );
       `),
       this.db.prepare(`
@@ -84,7 +103,8 @@ export class Database {
             created_at INTEGER NOT NULL,
             revoked_at INTEGER,
             revocation_reason TEXT,
-            replaced_by_cert_id TEXT
+            replaced_by_cert_id TEXT,
+            ca_id TEXT
         );
       `),
       this.db.prepare(`
@@ -102,10 +122,121 @@ export class Database {
       this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_certificates_serial ON certificates (serial_number);`),
     ]);
 
+    for (const [table, column, definition] of [
+      ["orders", "processing_started_at", "INTEGER"],
+      ["orders", "finalize_generation", "INTEGER NOT NULL DEFAULT 0"],
+      ["certificates", "ca_id", "TEXT"],
+    ]) {
+      const columns = await this.db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
+      if (!(columns.results ?? []).some((entry) => entry.name === column)) {
+        try { await this.db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run(); }
+        catch (error) { if (!/duplicate column name/i.test(String(error))) throw error; }
+      }
+    }
+
     try {
       await this.db.prepare("ALTER TABLE accounts ADD COLUMN terms_of_service TEXT;").run();
     } catch {
       // Column may already exist
+    }
+
+    // Public key identity index. The column is nullable because legacy rows
+    // cannot have their cryptographic fingerprint computed by SQLite; a
+    // separate, idempotent application-level migration backfills them.
+    try {
+      await this.db
+        .prepare("ALTER TABLE accounts ADD COLUMN public_key_fingerprint TEXT;")
+        .run();
+    } catch {
+      // Column may already exist
+    }
+
+    // Administrator-facing record of legacy keys that could not be indexed.
+    // It intentionally stores only account IDs, reason codes, and public
+    // fingerprints (public hashes), never JWKs or private key material.
+    await this.db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS account_key_conflicts (
+            account_id TEXT PRIMARY KEY,
+            reason TEXT NOT NULL,
+            public_key_fingerprint TEXT,
+            conflicting_account_id TEXT,
+            detected_at INTEGER NOT NULL
+        );`
+      )
+      .run();
+
+    // SQLite permits multiple NULLs in a UNIQUE index, so this index can be
+    // created before the legacy backfill and still guarantees that no two
+    // accounts are ever assigned the same actual public key.
+    try {
+      await this.db
+        .prepare(
+          "CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_public_key_fingerprint ON accounts (public_key_fingerprint);"
+        )
+        .run();
+    } catch {
+      // The index is re-checked by ensureAccountPublicKeyIndex() before any
+      // operation that depends on account-key identity. Record the failure so
+      // an administrator can inspect it instead of silently proceeding.
+      try {
+        await this.db
+          .prepare(
+            `INSERT INTO account_key_conflicts
+               (account_id, reason, public_key_fingerprint, conflicting_account_id, detected_at)
+             VALUES (?, ?, NULL, NULL, ?)
+             ON CONFLICT(account_id) DO UPDATE SET
+               reason = excluded.reason,
+               detected_at = excluded.detected_at`
+          )
+          .bind(
+            "__accounts_public_key_fingerprint_index__",
+            "unique_index_creation_failed",
+            Math.floor(Date.now() / 1000)
+          )
+          .run();
+      } catch {
+        // Surfaced by ensureAccountPublicKeyIndex() as a fail-closed error.
+      }
+    }
+
+    // An index with the right name may pre-exist without UNIQUE semantics.
+    // Record that state rather than assuming the name is enough.
+    const fingerprintIndex = await this.accountFingerprintIndexInfo();
+    if (!fingerprintIndex || !isAccountFingerprintIndexSql(fingerprintIndex.sql)) {
+      try {
+        await this.db
+          .prepare(
+            `INSERT INTO account_key_conflicts
+               (account_id, reason, public_key_fingerprint, conflicting_account_id, detected_at)
+             VALUES (?, ?, NULL, NULL, ?)
+             ON CONFLICT(account_id) DO UPDATE SET
+               reason = excluded.reason,
+               detected_at = excluded.detected_at`
+          )
+          .bind(
+            "__accounts_public_key_fingerprint_index__",
+            "unique_index_missing",
+            Math.floor(Date.now() / 1000)
+          )
+          .run();
+      } catch {
+        // Surfaced by ensureAccountPublicKeyIndex() as a fail-closed error.
+      }
+    }
+
+    // Optional partial index that keeps the "is migration complete?" check a
+    // cheap existence probe instead of an index-wide IS NULL scan on every
+    // newAccount/keyChange/finalize request.
+    try {
+      await this.db
+        .prepare(
+          `CREATE INDEX IF NOT EXISTS idx_accounts_missing_public_key_fingerprint
+             ON accounts (id) WHERE public_key_fingerprint IS NULL;`
+        )
+        .run();
+    } catch {
+      // Not required for correctness; the UNIQUE index also covers IS NULL.
     }
 
     // Upgrade a `challenges` table that was created before validation
@@ -155,21 +286,209 @@ export class Database {
       .first<AccountRow>();
   }
 
+  /**
+   * Looks up an account by the canonical actual-public-key fingerprint.
+   * This is a point lookup through the UNIQUE
+   * idx_accounts_public_key_fingerprint index.
+   */
+  async getAccountByPublicKeyFingerprint(
+    fingerprint: string
+  ): Promise<AccountRow | null> {
+    return await this.db
+      .prepare("SELECT * FROM accounts WHERE public_key_fingerprint = ?")
+      .bind(fingerprint)
+      .first<AccountRow>();
+  }
+
+  async accountFingerprintIndexInfo(): Promise<{
+    name: string;
+    sql: string | null;
+  } | null> {
+    const row = await this.db
+      .prepare(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND name = ? AND tbl_name = 'accounts'"
+      )
+      .bind("idx_accounts_public_key_fingerprint")
+      .first<{ name: string; sql: string | null }>();
+    return row ?? null;
+  }
+
+  async countAccountsMissingPublicKeyFingerprint(): Promise<number> {
+    const row = await this.db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM accounts WHERE public_key_fingerprint IS NULL"
+      )
+      .first<{ count: number }>();
+    return row?.count ?? 0;
+  }
+
+  /**
+   * Cheap existence probe used on every key-identity-sensitive request.
+   * Backed by the partial idx_accounts_missing_public_key_fingerprint index
+   * (or, as a fallback, the UNIQUE fingerprint index).
+   */
+  async hasAccountsMissingPublicKeyFingerprint(): Promise<boolean> {
+    const row = await this.db
+      .prepare(
+        "SELECT 1 AS present FROM accounts WHERE public_key_fingerprint IS NULL LIMIT 1"
+      )
+      .first<{ present: number }>();
+    return !!row;
+  }
+
+  /**
+   * Legacy rows that still need a fingerprint and have no recorded conflict.
+   * Conflicted rows are left untouched until an administrator resolves them;
+   * excluding them keeps repeated migration runs cheap. The UNIQUE index on
+   * public_key_fingerprint also serves this IS NULL predicate.
+   */
+  async listAccountsMissingPublicKeyFingerprint(
+    limit: number
+  ): Promise<AccountRow[]> {
+    const res = await this.db
+      .prepare(
+        `SELECT * FROM accounts
+         WHERE public_key_fingerprint IS NULL
+           AND id NOT IN (SELECT account_id FROM account_key_conflicts)
+         ORDER BY created_at, id
+         LIMIT ?`
+      )
+      .bind(limit)
+      .all<AccountRow>();
+    return res.results || [];
+  }
+
+  /** Assigns a fingerprint only while the row is still un-migrated. */
+  async setAccountPublicKeyFingerprint(
+    id: string,
+    fingerprint: string
+  ): Promise<boolean> {
+    const res = await this.db
+      .prepare(
+        `UPDATE accounts
+         SET public_key_fingerprint = ?
+         WHERE id = ? AND public_key_fingerprint IS NULL`
+      )
+      .bind(fingerprint, id)
+      .run();
+    return (res.meta?.changes ?? 0) > 0;
+  }
+
+  async recordAccountKeyConflict(conflict: {
+    account_id: string;
+    reason: string;
+    public_key_fingerprint: string | null;
+    conflicting_account_id: string | null;
+    detected_at: number;
+  }): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO account_key_conflicts
+           (account_id, reason, public_key_fingerprint, conflicting_account_id, detected_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(account_id) DO UPDATE SET
+           reason = excluded.reason,
+           public_key_fingerprint = excluded.public_key_fingerprint,
+           conflicting_account_id = excluded.conflicting_account_id,
+           detected_at = excluded.detected_at`
+      )
+      .bind(
+        conflict.account_id,
+        conflict.reason,
+        conflict.public_key_fingerprint,
+        conflict.conflicting_account_id,
+        conflict.detected_at
+      )
+      .run();
+  }
+
+  async listAccountKeyConflicts(limit = 100): Promise<
+    Array<{
+      account_id: string;
+      reason: string;
+      public_key_fingerprint: string | null;
+      conflicting_account_id: string | null;
+      detected_at: number;
+    }>
+  > {
+    const res = await this.db
+      .prepare(
+        `SELECT account_id, reason, public_key_fingerprint,
+                conflicting_account_id, detected_at
+         FROM account_key_conflicts
+         ORDER BY detected_at, account_id
+         LIMIT ?`
+      )
+      .bind(limit)
+      .all<{
+        account_id: string;
+        reason: string;
+        public_key_fingerprint: string | null;
+        conflicting_account_id: string | null;
+        detected_at: number;
+      }>();
+    return res.results || [];
+  }
+
+  async clearAccountKeyConflict(accountId: string): Promise<void> {
+    await this.db
+      .prepare("DELETE FROM account_key_conflicts WHERE account_id = ?")
+      .bind(accountId)
+      .run();
+  }
+
   async saveAccount(account: AccountRow): Promise<void> {
     await this.db
       .prepare(
-        "INSERT INTO accounts (id, jwk, thumbprint, contact, status, created_at, terms_of_service) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        `INSERT INTO accounts
+           (id, jwk, thumbprint, public_key_fingerprint, contact, status, created_at, terms_of_service)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         account.id,
         account.jwk,
         account.thumbprint,
+        account.public_key_fingerprint ?? null,
         account.contact,
         account.status,
         account.created_at,
         account.terms_of_service ?? null
       )
       .run();
+  }
+
+  /**
+   * Compare-and-swap rotation of an account key.
+   *
+   * The WHERE clause is keyed on the previously read thumbprint, so two
+   * concurrent keyChange requests cannot both win. The UNIQUE index on
+   * public_key_fingerprint is the final protection against reusing another
+   * account's actual key.
+   */
+  async updateAccountKey(
+    id: string,
+    expectedThumbprint: string,
+    update: {
+      jwk: string;
+      thumbprint: string;
+      publicKeyFingerprint: string;
+    }
+  ): Promise<boolean> {
+    const res = await this.db
+      .prepare(
+        `UPDATE accounts
+         SET jwk = ?, thumbprint = ?, public_key_fingerprint = ?
+         WHERE id = ? AND thumbprint = ? AND status = 'valid'`
+      )
+      .bind(
+        update.jwk,
+        update.thumbprint,
+        update.publicKeyFingerprint,
+        id,
+        expectedThumbprint
+      )
+      .run();
+    return (res.meta?.changes ?? 0) > 0;
   }
 
   async updateAccount(
@@ -530,21 +849,54 @@ export class Database {
    * Atomically claims a ready order for issuance so concurrent finalize
    * requests cannot both sign a certificate.
    */
-  async claimOrderForFinalize(orderId: string): Promise<boolean> {
-    const res = await this.db
-      .prepare("UPDATE orders SET status = 'processing' WHERE id = ? AND status = 'ready'")
-      .bind(orderId)
-      .run();
-    return (res.meta?.changes ?? 0) > 0;
+  async claimOrderForFinalize(orderId: string, now = Math.floor(Date.now() / 1000)): Promise<number | null> {
+    const row = await this.db.prepare(
+      `UPDATE orders SET status = 'processing', processing_started_at = ?, finalize_generation = finalize_generation + 1
+       WHERE id = ? AND expires_at > ? AND (status = 'ready' OR (status = 'processing' AND COALESCE(processing_started_at, 0) < ?))
+       RETURNING finalize_generation`
+    ).bind(now, orderId, now, now - 60).first<{ finalize_generation: number }>();
+    return row?.finalize_generation ?? null;
   }
 
-  async releaseOrderFromProcessing(orderId: string): Promise<void> {
-    await this.db
-      .prepare(
-        "UPDATE orders SET status = 'ready' WHERE id = ? AND status = 'processing' AND certificate_id IS NULL"
-      )
-      .bind(orderId)
-      .run();
+  async releaseOrderFromProcessing(orderId: string, generation: number): Promise<void> {
+    await this.db.prepare(
+      `UPDATE orders SET status = 'ready', processing_started_at = NULL
+       WHERE id = ? AND status = 'processing' AND finalize_generation = ? AND certificate_id IS NULL`
+    ).bind(orderId, generation).run();
+  }
+
+  async invalidateFinalizeClaim(orderId: string, generation: number): Promise<void> {
+    await this.db.prepare("UPDATE orders SET status = 'invalid' WHERE id = ? AND status = 'processing' AND finalize_generation = ?")
+      .bind(orderId, generation).run();
+  }
+
+  /** All three writes share D1's batch transaction and the INSERT's fenced guard. */
+  async completeOrder(orderId: string, generation: number, cert: CertificateRow, predecessor: string | null, now: number): Promise<boolean> {
+    const results = await this.db.batch([
+      this.db.prepare(
+        `INSERT INTO certificates (id, cert_id, serial_number, aki, subject, san, pem, not_before, not_after,
+          account_id, created_at, revoked_at, revocation_reason, replaced_by_cert_id, ca_id)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?
+         WHERE EXISTS (SELECT 1 FROM orders o JOIN accounts a ON a.id = o.account_id
+           WHERE o.id = ? AND o.status = 'processing' AND o.finalize_generation = ?
+           AND o.processing_started_at > ? AND o.expires_at > ? AND a.status = 'valid')
+         AND EXISTS (SELECT 1 FROM authorizations WHERE order_id = ?)
+         AND NOT EXISTS (SELECT 1 FROM authorizations WHERE order_id = ? AND (status != 'valid' OR expires_at <= ?))
+         AND (? IS NULL OR EXISTS (SELECT 1 FROM certificates WHERE cert_id = ? AND replaced_by_cert_id IS NULL))`
+      ).bind(cert.id, cert.cert_id, cert.serial_number, cert.aki, cert.subject, cert.san, cert.pem,
+        cert.not_before, cert.not_after, cert.account_id, cert.created_at, cert.ca_id ?? null,
+        orderId, generation, now - 60, now, orderId, orderId, now, predecessor, predecessor),
+      this.db.prepare(
+        `UPDATE certificates SET replaced_by_cert_id = ? WHERE cert_id = ? AND replaced_by_cert_id IS NULL
+         AND EXISTS (SELECT 1 FROM certificates WHERE id = ?)`
+      ).bind(cert.cert_id, predecessor, cert.id),
+      this.db.prepare(
+        `UPDATE orders SET status = 'valid', certificate_id = ?, processing_started_at = NULL
+         WHERE id = ? AND finalize_generation = ? AND status = 'processing'
+         AND EXISTS (SELECT 1 FROM certificates WHERE id = ?)`
+      ).bind(cert.id, orderId, generation, cert.id),
+    ]);
+    return (results[0].meta?.changes ?? 0) === 1 && (results[2].meta?.changes ?? 0) === 1;
   }
 
   /** Returns the challenge types that successfully validated each order identifier. */
@@ -568,8 +920,8 @@ export class Database {
     await this.db
       .prepare(
         `INSERT INTO certificates (id, cert_id, serial_number, aki, subject, san, pem,
-          not_before, not_after, account_id, created_at, revoked_at, revocation_reason, replaced_by_cert_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          not_before, not_after, account_id, created_at, revoked_at, revocation_reason, replaced_by_cert_id, ca_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         cert.id,
@@ -585,7 +937,8 @@ export class Database {
         cert.created_at,
         cert.revoked_at,
         cert.revocation_reason,
-        cert.replaced_by_cert_id
+        cert.replaced_by_cert_id,
+        cert.ca_id ?? null
       )
       .run();
   }
@@ -604,31 +957,29 @@ export class Database {
       .first<CertificateRow>();
   }
 
-  async getCertificateBySerial(serial: string): Promise<CertificateRow | null> {
-    return await this.db
-      .prepare("SELECT * FROM certificates WHERE serial_number = ?")
-      .bind(serial)
-      .first<CertificateRow>();
-  }
-
-  async markCertificateReplaced(certId: string, newCertId: string): Promise<void> {
-    await this.db
-      .prepare("UPDATE certificates SET replaced_by_cert_id = ? WHERE cert_id = ?")
-      .bind(newCertId, certId)
-      .run();
-  }
-
   async revokeCertificate(
     certId: string,
     revokedAt: number,
     reason: string
-  ): Promise<void> {
-    await this.db
+  ): Promise<boolean> {
+    const result = await this.db
       .prepare(
-        "UPDATE certificates SET revoked_at = ?, revocation_reason = ? WHERE cert_id = ?"
+        "UPDATE certificates SET revoked_at = ?, revocation_reason = ? WHERE cert_id = ? AND revoked_at IS NULL"
       )
       .bind(revokedAt, reason, certId)
       .run();
+    return (result.meta?.changes ?? 0) === 1;
+  }
+
+  async accountHasValidAuthorizations(accountId: string, domains: string[], now: number): Promise<boolean> {
+    for (const domain of domains) {
+      const row = await this.db.prepare(
+        `SELECT a.id FROM authorizations a JOIN orders o ON o.id = a.order_id
+         WHERE o.account_id = ? AND a.identifier_value = ? AND a.status = 'valid' AND a.expires_at > ? LIMIT 1`
+      ).bind(accountId, domain, now).first();
+      if (!row) return false;
+    }
+    return true;
   }
 
   // --- Rate Limit Operations ---

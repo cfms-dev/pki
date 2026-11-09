@@ -1,6 +1,6 @@
-import { AcmeEnv, CONFIG, getTermsOfServiceUrl } from "../config";
+import { AcmeEnv, CONFIG, configuredDays, getTermsOfServiceUrl } from "../config";
 import { generateNonceString } from "../crypto/nonce";
-import { verifyAcmeJws, exportPublicJwkSpki } from "../crypto/jws";
+import { normalizePublicKey, verifyAcmeJws } from "../crypto/jws";
 import {
   issueCertificateFromCsr,
   parseAndVerifyCsr,
@@ -8,8 +8,9 @@ import {
 } from "../crypto/x509";
 import { selectIntermediateCa } from "../crypto/ca";
 import { validateCaaForOrder } from "../dns/caa";
+import { ensureAccountPublicKeyIndex } from "../db/account-keys";
 import { Database } from "../db/queries";
-import { AuthorizationRow, OrderRow } from "../db/types";
+import { AccountRow, AuthorizationRow, OrderRow } from "../db/types";
 import { AcmeError } from "../errors";
 import { checkAriRenewalEligibility } from "../ari/window";
 import { RateLimiter } from "../ratelimit/limiter";
@@ -45,7 +46,7 @@ export async function handleNewOrder(
   }
 
   const payload = verified.payload;
-  if (!Array.isArray(payload.identifiers) || payload.identifiers.length === 0) {
+  if (!Array.isArray(payload.identifiers) || payload.identifiers.length === 0 || payload.identifiers.length > 100) {
     throw AcmeError.malformed("newOrder must specify at least one identifier");
   }
 
@@ -98,7 +99,7 @@ export async function handleNewOrder(
       );
     }
 
-    const eligibility = checkAriRenewalEligibility(predecessor, domainList);
+    const eligibility = checkAriRenewalEligibility(predecessor, domainList, undefined, configuredDays(env.RENEWAL_WINDOW_DAYS, CONFIG.DEFAULT_RENEWAL_WINDOW_DAYS));
     if (!eligibility.eligible) {
       throw AcmeError.malformed(
         `ARI renewal rejected: ${eligibility.reason || "Certificate not eligible for ARI renewal"}`
@@ -117,13 +118,21 @@ export async function handleNewOrder(
   const now = Math.floor(Date.now() / 1000);
   const expiresAt = now + CONFIG.ORDER_EXPIRATION_SECONDS;
 
+  const requestedBefore = parseRequestedDate(payload.notBefore);
+  const requestedAfter = parseRequestedDate(payload.notAfter);
+  const maxValidity = configuredDays(env.CERT_VALIDITY_DAYS, CONFIG.DEFAULT_CERT_VALIDITY_DAYS) * 86400;
+  const effectiveBefore = requestedBefore ?? now;
+  if ((requestedBefore !== null && requestedBefore < now - 300) ||
+      (requestedAfter !== null && (requestedAfter <= effectiveBefore || requestedAfter - effectiveBefore > maxValidity))) {
+    throw AcmeError.malformed("Requested certificate validity is outside policy");
+  }
   const order: OrderRow = {
     id: orderId,
     account_id: verified.account.id,
     status: "pending",
     identifiers: JSON.stringify(domainList),
-    not_before: payload.notBefore ? Math.floor(new Date(payload.notBefore).getTime() / 1000) : null,
-    not_after: payload.notAfter ? Math.floor(new Date(payload.notAfter).getTime() / 1000) : null,
+    not_before: requestedBefore,
+    not_after: requestedAfter,
     replaces_cert_id: replacesCertId,
     is_ari_renewal: isAriRenewal ? 1 : 0,
     created_at: now,
@@ -231,14 +240,14 @@ export async function handleFinalizeOrder(
     );
   }
 
-  if (order.status !== "ready") {
+  if (order.status !== "ready" && !(order.status === "processing" && (order.processing_started_at ?? 0) < now - 60)) {
     throw AcmeError.orderNotReady(
       `Order is '${order.status}'; only a ready order can be finalized`
     );
   }
 
   if (order.expires_at <= now) {
-    await database.updateOrderStatus(orderId, "invalid");
+    await database.invalidateOpenOrder(orderId);
     order.status = "invalid";
     throw AcmeError.orderNotReady("Order has expired");
   }
@@ -278,17 +287,24 @@ export async function handleFinalizeOrder(
   // registered to another account. This runs before the order is claimed and
   // before any intermediate CA is invoked, so no non-compliant certificate
   // can be issued.
+  //
+  // Re-read the account so a concurrent keyChange cannot make the comparison
+  // use a stale key snapshot.
+  const currentAccount = await database.getAccountById(verified.account.id);
+  if (!currentAccount || currentAccount.status !== "valid") {
+    throw AcmeError.unauthorized("Account is no longer valid");
+  }
+  await assertCsrKeyIsNotAnAccountKey(parsedCsr, JSON.stringify(verified.jwk), database);
   await assertCsrKeyIsNotAnAccountKey(
     parsedCsr,
-    verified.jwk,
-    verified.header.alg,
+    currentAccount.jwk,
     database
   );
 
   // Serialize finalization: only one request may move a ready order to
   // processing and issue a certificate.
   const claimed = await database.claimOrderForFinalize(orderId);
-  if (!claimed) {
+  if (claimed === null) {
     const latest = await database.getOrderById(orderId);
     if (latest?.status === "valid" && latest.certificate_id) {
       return formatOrderResponse(
@@ -311,7 +327,7 @@ export async function handleFinalizeOrder(
         (authz) => authz.status !== "valid" || authz.expires_at <= nowBeforeIssue
       )
     ) {
-      await database.updateOrderStatus(orderId, "invalid");
+      await database.invalidateFinalizeClaim(orderId, claimed);
       throw AcmeError.orderNotReady(
         "All authorizations must be valid and unexpired before issuance"
       );
@@ -348,8 +364,9 @@ export async function handleFinalizeOrder(
       parsedCsr.csr,
       orderDomains,
       env,
-      undefined,
-      selectedCa
+      configuredDays(env.CERT_VALIDITY_DAYS, CONFIG.DEFAULT_CERT_VALIDITY_DAYS),
+      selectedCa,
+      { notBefore: order.not_before, notAfter: order.not_after }
     );
 
     // Re-check authorization validity and order state immediately before
@@ -363,6 +380,7 @@ export async function handleFinalizeOrder(
     if (
       !orderBeforePersist ||
       orderBeforePersist.status !== "processing" ||
+      orderBeforePersist.finalize_generation !== claimed ||
       orderBeforePersist.expires_at <= finalCheckTime ||
       authzsBeforePersist.length === 0 ||
       authzsBeforePersist.some(
@@ -370,15 +388,15 @@ export async function handleFinalizeOrder(
           authz.status !== "valid" || authz.expires_at <= finalCheckTime
       )
     ) {
-      await database.updateOrderStatus(orderId, "invalid");
       throw AcmeError.orderNotReady(
         "Order or authorization expired before the certificate could be issued"
       );
     }
 
     const certIdInDb = crypto.randomUUID();
-    await database.saveCertificate({
+    const persisted = await database.completeOrder(orderId, claimed, {
       id: certIdInDb,
+      ca_id: issued.caId,
       cert_id: issued.certId,
       serial_number: issued.serialNumber,
       aki: issued.aki,
@@ -392,15 +410,9 @@ export async function handleFinalizeOrder(
       revoked_at: null,
       revocation_reason: null,
       replaced_by_cert_id: null,
-    });
+    }, order.is_ari_renewal ? order.replaces_cert_id : null, finalCheckTime);
+    if (!persisted) throw AcmeError.orderNotReady("Issuance claim expired or predecessor was already replaced");
 
-    // If this was an ARI renewal, link replacement on predecessor cert
-    if (order.is_ari_renewal && order.replaces_cert_id) {
-      await database.markCertificateReplaced(order.replaces_cert_id, issued.certId);
-    }
-
-    // Update order status to valid
-    await database.updateOrderStatus(orderId, "valid", certIdInDb);
     order.status = "valid";
     order.certificate_id = certIdInDb;
 
@@ -413,7 +425,7 @@ export async function handleFinalizeOrder(
   } catch (err) {
     // Issuance did not complete. Return the order to `ready` (unless it was
     // deliberately marked invalid above) so the client can retry.
-    await database.releaseOrderFromProcessing(orderId);
+    await database.releaseOrderFromProcessing(orderId, claimed);
     throw err;
   }
 }
@@ -432,21 +444,22 @@ function equalPublicKeyBytes(a: Uint8Array, b: Uint8Array): boolean {
  * request, and the server also rejects a key that is already registered to
  * another account.
  *
- * Account keys are compared through their canonical SPKI DER encoding rather
- * than the stored JWK JSON, whose field order and encoding are not canonical.
- * The cross-account check uses the accounts table's UNIQUE thumbprint index
- * (the RFC 7638 thumbprint of the account key), so it is a point lookup rather
- * than a table scan.
+ * Account keys are compared through their canonical SPKI DER / SHA-256
+ * fingerprint rather than the stored JWK JSON or its RFC 7638 thumbprint: the
+ * former is not canonical, while the latter is a protocol value that differs
+ * for legal alternate encodings of the same key. The cross-account check uses
+ * the accounts table's UNIQUE public_key_fingerprint index, so it is a point
+ * lookup rather than a table scan.
  */
 async function assertCsrKeyIsNotAnAccountKey(
   parsedCsr: ParsedCsr,
-  accountJwk: JsonWebKey,
-  accountAlgorithm: string,
+  accountJwkJson: string,
   database: Database
 ): Promise<void> {
   let accountSpki: Uint8Array;
   try {
-    accountSpki = await exportPublicJwkSpki(accountJwk, accountAlgorithm);
+    const accountJwk = JSON.parse(accountJwkJson) as unknown;
+    accountSpki = (await normalizePublicKey(accountJwk)).spki;
   } catch {
     // A comparison that cannot be performed must never be treated as a pass.
     // The account key was just used to verify the request signature, so this
@@ -462,9 +475,22 @@ async function assertCsrKeyIsNotAnAccountKey(
     );
   }
 
-  const existingAccount = await database.getAccountByThumbprint(
-    parsedCsr.publicKeyThumbprint
-  );
+  // Refuse to make a cross-account decision while any legacy account key is
+  // still unindexed. This is the fail-closed requirement: an empty/partial
+  // index must not be interpreted as "key unused".
+  await ensureAccountPublicKeyIndex(database);
+
+  let existingAccount: AccountRow | null;
+  try {
+    existingAccount = await database.getAccountByPublicKeyFingerprint(
+      parsedCsr.publicKeyFingerprint
+    );
+  } catch {
+    throw AcmeError.serverInternal(
+      "Unable to complete the cross-account public key reuse check"
+    );
+  }
+
   if (existingAccount) {
     throw AcmeError.badCSR(
       "The CSR public key is already registered to an ACME account; a distinct certificate key is required"
@@ -513,4 +539,18 @@ function formatOrderResponse(
       Location: `${baseUrl}/order/${order.id}`,
     },
   });
+}
+
+function parseRequestedDate(value: unknown): number | null {
+  if (value === undefined) return null;
+  const match = typeof value === "string" && /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/.exec(value);
+  if (!match || Number(match[2]) < 1 || Number(match[2]) > 12 || Number(match[3]) < 1 ||
+      Number(match[3]) > new Date(Date.UTC(Number(match[1]), Number(match[2]), 0)).getUTCDate() ||
+      Number(match[4]) > 23 || Number(match[5]) > 59 || Number(match[6]) > 59 ||
+      (match[8] !== undefined && (Number(match[8]) > 23 || Number(match[9]) > 59))) {
+    throw AcmeError.malformed("Requested dates must be valid RFC 3339 timestamps");
+  }
+  const time = Date.parse(value as string);
+  if (!Number.isFinite(time)) throw AcmeError.malformed("Invalid requested date");
+  return Math.floor(time / 1000);
 }

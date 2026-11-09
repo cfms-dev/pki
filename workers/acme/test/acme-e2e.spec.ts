@@ -47,6 +47,10 @@ describe("ACME RFC 8555 & RFC 9773 ARI End-to-End Suite", () => {
       CA_CERT_PEM: caCertPem,
       PK_GENERIC_INTERMEDIATE: caKeyPem,
       PK_ENV_VAR: "PK_GENERIC_INTERMEDIATE",
+      fetch: async (input: RequestInfo | URL) => {
+        if (!String(input).includes("type=CAA")) return globalThis.fetch(input);
+        return new Response(JSON.stringify({ Status: 0 }), { headers: { "Content-Type": "application/dns-json" } });
+      },
     };
   });
 
@@ -203,7 +207,7 @@ describe("ACME RFC 8555 & RFC 9773 ARI End-to-End Suite", () => {
           { status: 200, headers: { "Content-Type": "application/dns-json" } }
         );
       }
-      return originalFetch(input, init);
+      throw new Error("Unexpected external request: " + urlStr);
     }) as typeof fetch;
 
     try {
@@ -383,7 +387,7 @@ describe("ACME RFC 8555 & RFC 9773 ARI End-to-End Suite", () => {
           { status: 200, headers: { "Content-Type": "application/dns-json" } }
         );
       }
-      return originalFetch(input, init);
+      throw new Error("Unexpected external request: " + urlStr);
     }) as typeof fetch;
 
     try {

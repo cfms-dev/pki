@@ -40,7 +40,7 @@ describe("CA packaging", () => {
     const manifestPath = path.join(outputDir, "manifest.json");
     expect(fs.readFileSync(certPath, "utf-8")).toBe(certificate);
     expect(JSON.parse(fs.readFileSync(manifestPath, "utf-8"))).toEqual({
-      cas: { test: { certFile: "test.pem", pkEnv: "PK_TEST" } },
+      cas: { test: { certFile: "test.pem", pkEnv: "PK_TEST", crlFile: "test.crl" } },
     });
     const timestamp = new Date("2020-01-01T00:00:00Z");
     fs.utimesSync(certPath, timestamp, timestamp);
@@ -49,6 +49,14 @@ describe("CA packaging", () => {
     expect(second.status, second.stderr).toBe(0);
     expect(fs.statSync(certPath).mtime).toEqual(timestamp);
     expect(fs.statSync(manifestPath).mtime).toEqual(timestamp);
+  });
+
+  it("carries a configured CRL filename into the bundle", () => {
+    fs.writeFileSync(path.join(repoDir, "registry/ca.json"), JSON.stringify({
+      cas: { test: { location: "certs/test.pem", pk_env: "PK_TEST", crl_path: "crl/custom.crl" } },
+    }));
+    expect(bundle().status).toBe(0);
+    expect(JSON.parse(fs.readFileSync(path.join(outputDir, "manifest.json"), "utf-8")).cas.test.crlFile).toBe("custom.crl");
   });
 
   it("fails if the registry is missing even when a previous bundle exists", () => {
