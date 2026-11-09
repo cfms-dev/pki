@@ -81,7 +81,21 @@ try {
   const redirect = await runtime.dispatchFetch(`${base}/index.html`, { redirect: "manual" });
   assert.equal(redirect.status, 307);
   assert.equal(new URL(redirect.headers.get("Location"), base).href, `${base}/`);
-  for (const page of ["terms", "privacy"]) {
+  const chineseHome = await runtime.dispatchFetch(`${base}/zh-cn/`);
+  assert.equal(chineseHome.status, 200);
+  assert.equal(chineseHome.headers.get("Replay-Nonce"), null);
+  const chineseHtml = await chineseHome.text();
+  assert.ok(chineseHtml.includes('<html lang="zh-CN">'));
+  assert.ok(chineseHtml.includes("证书签发，"));
+  assert.ok(chineseHtml.includes('href="/directory"><code>/directory</code>'));
+  const chineseEtag = chineseHome.headers.get("ETag");
+  assert.ok(chineseEtag);
+  const chineseCached = await runtime.dispatchFetch(`${base}/zh-cn/`, { headers: { "If-None-Match": chineseEtag } });
+  assert.equal(chineseCached.status, 304);
+  const chineseAlias = await runtime.dispatchFetch(`${base}/zh-cn/index.html`, { redirect: "manual" });
+  assert.equal(chineseAlias.status, 307);
+  assert.equal(new URL(chineseAlias.headers.get("Location"), base).pathname, "/zh-cn/");
+  for (const page of ["terms", "privacy", "zh-cn/terms", "zh-cn/privacy"]) {
     const alias = await runtime.dispatchFetch(`${base}/${page}.html`, { redirect: "manual" });
     assert.equal(alias.status, 307);
     assert.equal(new URL(alias.headers.get("Location"), base).pathname, `/${page}`);
@@ -93,12 +107,12 @@ try {
   const css = await runtime.dispatchFetch(`${base}/styles.css`);
   assert.equal(css.status, 200);
   assert.ok(css.headers.get("Content-Type").startsWith("text/css"));
-  for (const resource of ["/missing.css", "/images/missing.png"]) {
+  for (const resource of ["/missing.css", "/images/missing.png", "/zh-cn/missing"]) {
     const missing = await runtime.dispatchFetch(`${base}${resource}`);
     assert.equal(missing.status, 404);
     assert.equal(missing.headers.get("Replay-Nonce"), null);
   }
-  for (const page of ["/", "/index.html", "/terms", "/privacy", "/styles.css"]) {
+  for (const page of ["/", "/index.html", "/terms", "/privacy", "/styles.css", "/zh-cn/", "/zh-cn/index.html", "/zh-cn/terms", "/zh-cn/privacy"]) {
     for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
       const rejected = await runtime.dispatchFetch(`${base}${page}`, { method, redirect: "manual" });
       assert.equal(rejected.status, 405);

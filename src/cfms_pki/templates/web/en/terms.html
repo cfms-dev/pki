@@ -1,0 +1,48 @@
+<section class="hero" aria-labelledby="page-title">
+        <p class="eyebrow">Service policies · Updated 9 November 2026</p>
+        <h1 id="page-title">Terms of service</h1>
+        <p class="lead">Responsibilities and limitations when using the CFMS PKI ACME certificate service.</p>
+      </section>
+      <div class="policy-content">
+        <section aria-labelledby="purpose">
+          <h2 id="purpose">Service and certificate use</h2>
+          <p>The service provides automated certificate requests, domain validation, issuance, renewal information
+            and revocation through ACME. Use <a href="/directory">the ACME directory</a> with a compatible client.</p>
+          <p>A certificate records validated domain control at issuance. It does not establish a person's identity,
+            endorse website content or guarantee that a service is safe. Check that the relevant CFMS PKI trust chain
+            is accepted by your intended clients; issuance does not guarantee trust in browsers or operating systems.</p>
+        </section>
+        <section aria-labelledby="control">
+          <h2 id="control">Identifier control and permitted use</h2>
+          <p>Request certificates only for domains and public IP addresses you control or are authorized to manage. Complete validation
+            truthfully and use certificates in accordance with applicable requirements.</p>
+          <p>Do not attempt to bypass domain validation, impersonate another account, obtain unauthorized certificates,
+            evade rate limits or disrupt the service. Wildcard names require DNS-01 validation. Public IP-address
+            certificates require HTTP-01 and are valid for at most 160 hours, including mixed domain/IP certificates.</p>
+        </section>
+        <section aria-labelledby="keys">
+          <h2 id="keys">Keys, renewal and revocation</h2>
+          <p>Protect your ACME account private key and certificate private keys. Your client generates and retains
+            these keys; do not submit private keys as account contact information or request payloads.</p>
+          <p>You are responsible for certificate installation, monitoring expiry, timely renewal and requesting
+            revocation when a key is compromised or a certificate should no longer be used. Renewal information
+            helps schedule requests but does not renew a certificate for you.</p>
+        </section>
+        <section aria-labelledby="availability">
+          <h2 id="availability">Availability and changes</h2>
+          <p>The service is provided on an as-available basis, without a promised uptime or issuance time.
+            Validation failures, rate limits, maintenance or infrastructure failures may prevent or delay requests.
+            Plan for renewal failures and do not rely on successful issuance at the last moment.</p>
+          <p>Service settings and these terms may change. When the ACME directory advertises a terms-of-service URL,
+            the client must agree to the applicable terms to create an account or continue ordering. A changed terms
+            URL requires renewed agreement through the existing ACME account flow.</p>
+        </section>
+        <section aria-labelledby="data">
+          <h2 id="data">Data and project information</h2>
+          <p>The <a href="{{ privacy_href }}">privacy policy</a> describes the records and external services used to operate
+            this service. Account deactivation changes account status; it does not erase stored records.</p>
+          <p>Implementation details and project discussions are available in the
+            <a href="https://github.com/cfms-dev/pki">source repository</a>. Do not post private keys or sensitive
+            account information in public issues.</p>
+        </section>
+      </div>

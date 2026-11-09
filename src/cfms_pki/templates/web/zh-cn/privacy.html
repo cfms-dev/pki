@@ -1,0 +1,36 @@
+<section class="hero" aria-labelledby="page-title">
+  <p class="eyebrow">服务政策 · 更新于 2026 年 11 月 9 日</p>
+  <h1 id="page-title">隐私政策</h1>
+  <p class="lead">运行证书签发、验证与账户管理所使用的数据。</p>
+</section>
+<div class="policy-content">
+  <section aria-labelledby="records">
+    <h2 id="records">服务记录</h2>
+    <p>ACME 服务在 Cloudflare D1 中存储运行记录。根据您的请求，这些记录包括：</p>
+    <ul>
+      <li>账户标识符、公钥及密钥指纹、可选的联系信息、账户状态、创建时间，以及启用条款同意机制时已同意的条款 URL。</li>
+      <li>申请的域名、订单、授权与质询令牌、验证状态、错误与时间戳，以及用于执行速率限制的计数器。</li>
+      <li>已签发证书的内容、序列号、域名、有效期、签发 CA 引用、账户关联、续期关系，以及吊销状态或原因。</li>
+    </ul>
+    <p>您的账户私钥与证书私钥由客户端保管；正常 ACME 请求提供公钥、签名与证书签名请求。服务另行使用其配置的 CA 签名密钥签发证书。</p>
+  </section>
+  <section aria-labelledby="purpose">
+    <h2 id="purpose">记录的用途</h2>
+    <p>这些记录用于请求认证、防止重放、证明域名控制权、签发、续期信息、吊销、防滥用限制，以及账户或条款管理。证书和吊销信息旨在供需要验证证书的各方使用；请勿将证书中包含的域名视为保密信息。</p>
+  </section>
+  <section aria-labelledby="providers">
+    <h2 id="providers">基础设施与验证服务</h2>
+    <p>Cloudflare Workers 处理请求并提供这些页面，Workers Assets 存储网页资源，D1 存储 ACME 记录。Cloudflare 作为基础设施提供方，也会处理网络与请求信息。其自身的数据处理惯例见 <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare 隐私政策</a>。</p>
+    <p>域名验证会发起 DNS-over-HTTPS 查询，包括通过 Cloudflare 和 Google 解析器进行查询。IP 验证通过 TCP 直接连接公网 IP，不预先进行 DNS 查询。HTTP-01 请求会向目标暴露质询令牌与密钥授权交换信息；重定向可能联系其他公网 IP 或域名。HTTPS 目标使用经过证书验证的 TLS。这些 DNS 查询会向解析器披露所查询的名称。HTTP-01 验证会联系域名的 Web 服务器，并可能跟随允许的重定向，向所联系的服务器披露质询路径。此外，服务还通过 CAA 查询检查证书签发权限。</p>
+  </section>
+  <section aria-labelledby="logs">
+    <h2 id="logs">日志与网站功能</h2>
+    <p>仓库中的配置整体关闭了可观测性，同时保留了 Cloudflare 调用日志与跟踪持久化的设置。是否收集数据取决于实际部署设置。应用错误日志使用有限的诊断字段，例如错误引用、路径与错误类型，而非有意记录私钥或完整 ACME 请求体。如果启用基础设施日志，日志可能包含其他请求元数据。</p>
+    <p>这些页面不包含浏览器脚本、分析工具集成或由应用设置的 Cookie。访问 GitHub、Cloudflare 或其他站点的链接时，会向相应站点发起请求，并适用其自身的政策。</p>
+  </section>
+  <section aria-labelledby="management">
+    <h2 id="management">账户变更与已存储数据</h2>
+    <p>您可以通过 ACME 更新联系信息并停用账户。停用不会删除账户、关联订单或证书记录。当前实现不提供通用的账户数据删除端点，也没有针对这些记录的固定自动保留计划。</p>
+    <p>证书或订单到期不会自动删除服务数据。本政策不承诺固定的保留期限或删除时限。项目信息见<a href="https://github.com/cfms-dev/pki">源码仓库</a>；请勿在公开讨论中包含敏感账户数据。</p>
+  </section>
+</div>

@@ -3,7 +3,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { CONFIG } from "../src/config.ts";
-import { buildWebsite, renderHome } from "../scripts/build-website.mjs";
+import { buildWebsite, renderTemplate } from "../scripts/build-website.mjs";
 
 let root;
 const output = (name) => path.join(root, "dist", "website", name);
@@ -36,8 +36,35 @@ describe("Static website build", () => {
       expect(html).not.toMatch(/\{\{\w+\}\}/);
       expect(html).not.toContain("<script");
     }
-    for (const name of ["terms.html", "privacy.html", "styles.css"]) {
-      expect(await readFile(output(name))).toEqual(await readFile(path.join(root, "public", name)));
+    expect(await readFile(output("styles.css"))).toEqual(
+      await readFile(new URL("../../../src/cfms_pki/templates/web/styles.css", import.meta.url))
+    );
+  });
+
+  it.each(["https://distribution.example/pki/crl/", "https://distribution.example/pki/crl"])("preserves the project prefix from %s across all translated pages", async (crlUrl) => {
+    CONFIG.CRL_BASE_URL = crlUrl;
+    await buildWebsite(root);
+    for (const prefix of ["", "zh-cn/"]) {
+      for (const page of ["index", "terms", "privacy"]) {
+        const html = await readFile(output(`${prefix}${page}.html`), "utf8");
+        expect(html).toContain(`<html lang="${prefix ? "zh-CN" : "en"}">`);
+        const nav = html.split('<div class="nav-links">')[1].split("</div>")[0];
+        const links = [...nav.matchAll(/<a href="([^"]+)"/g)].map((match) => match[1]);
+        expect(links).toEqual([
+          `https://distribution.example/pki/${prefix}`,
+          prefix ? `https://distribution.example/pki/${prefix}crl/` : crlUrl,
+          `/${prefix}`, "https://github.com/cfms-dev/pki",
+        ]);
+        expect(nav).toContain(`href="/${prefix}" aria-current="${page === "index" ? "page" : "location"}"`);
+        const alternate = `/${prefix ? "" : "zh-cn/"}${page === "index" ? "" : page}`;
+        expect(html).toContain(`class="language-switch" href="${alternate}"`);
+        for (const policy of ["terms", "privacy"]) {
+          expect(html).toContain(`href="/${prefix}${policy}" aria-current="${page === policy ? "page" : "false"}"`);
+        }
+        expect(html).not.toMatch(/\{\{/);
+        expect(html).not.toContain("<script");
+        if (prefix) expect(html).toContain(page === "index" ? "证书签发，" : "2026 年 11 月 9 日");
+      }
     }
   });
 
@@ -58,9 +85,9 @@ describe("Static website build", () => {
 
   it("escapes HTML in one pass and keeps inserted replacement tokens literal", () => {
     const template = '<a href="{{CRL_URL}}">{{CRL_URL}}</a>';
-    expect(renderHome(template, ' https://example.test/<>&"\'{{CRL_URL}}$& ')).toBe(
+    expect(renderTemplate(template, { CRL_URL: 'https://example.test/<>&"\'{{CRL_URL}}$&' })).toBe(
       '<a href="https://example.test/&lt;&gt;&amp;&quot;&#39;{{CRL_URL}}$&amp;">https://example.test/&lt;&gt;&amp;&quot;&#39;{{CRL_URL}}$&amp;</a>'
     );
-    expect(() => renderHome("{{UNKNOWN}}", "https://example.test/")).toThrow("Unknown homepage template placeholder");
+    expect(() => renderTemplate("{{UNKNOWN}}", {})).toThrow("Unknown website template placeholder");
   });
 });

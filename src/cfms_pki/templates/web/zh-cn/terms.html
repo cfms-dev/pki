@@ -1,0 +1,32 @@
+<section class="hero" aria-labelledby="page-title">
+  <p class="eyebrow">服务政策 · 更新于 2026 年 11 月 9 日</p>
+  <h1 id="page-title">服务条款</h1>
+  <p class="lead">使用 CFMS PKI ACME 证书服务时的责任与限制。</p>
+</section>
+<div class="policy-content">
+  <section aria-labelledby="purpose">
+    <h2 id="purpose">服务与证书使用</h2>
+    <p>本服务通过 ACME 提供自动化证书申请、域名验证、签发、续期信息与吊销。请使用兼容的客户端连接 <a href="/directory">ACME 目录</a>。</p>
+    <p>证书记录签发时已经验证的域名控制权。它不证明个人身份，不为网站内容背书，也不保证服务安全。请确认目标客户端接受相应的 CFMS PKI 信任链；签发证书不代表浏览器或操作系统必然信任它。</p>
+  </section>
+  <section aria-labelledby="control">
+    <h2 id="control">标识符控制权与允许的用途</h2>
+    <p>仅为您控制或获授权管理的域名与公网 IP 地址申请证书。如实完成验证，并遵守适用要求使用证书。</p>
+    <p>不得尝试绕过域名验证、冒充其他账户、获取未经授权的证书、规避速率限制或干扰服务。通配符域名必须通过 DNS-01 验证。公网 IP 地址证书必须通过 HTTP-01 验证，有效期最长为 160 小时，同时包含域名与 IP 地址的证书也适用这一限制。</p>
+  </section>
+  <section aria-labelledby="keys">
+    <h2 id="keys">密钥、续期与吊销</h2>
+    <p>请保护您的 ACME 账户私钥和证书私钥。这些密钥由客户端生成并保管；请勿将私钥作为账户联系信息或请求内容提交。</p>
+    <p>您负责证书安装、监测到期时间、及时续期，以及在密钥泄露或证书不应继续使用时申请吊销。续期信息有助于安排请求，但不会代您完成续期。</p>
+  </section>
+  <section aria-labelledby="availability">
+    <h2 id="availability">可用性与变更</h2>
+    <p>本服务按可用状态提供，不承诺正常运行时间或签发时限。验证失败、速率限制、维护或基础设施故障可能阻止或延迟请求。请为续期失败做好准备，避免依赖临近到期时成功签发。</p>
+    <p>服务设置及本条款可能变更。当 ACME 目录公布服务条款 URL 时，客户端必须同意适用条款才能创建账户或继续提交订单。条款 URL 变更后，需要通过现有 ACME 账户流程重新同意。</p>
+  </section>
+  <section aria-labelledby="data">
+    <h2 id="data">数据与项目信息</h2>
+    <p><a href="{{ privacy_href }}">隐私政策</a>说明运行本服务所使用的记录和外部服务。停用账户会改变账户状态，但不会删除已存储的记录。</p>
+    <p>实现细节与项目讨论见<a href="https://github.com/cfms-dev/pki">源码仓库</a>。请勿在公开议题中发布私钥或敏感账户信息。</p>
+  </section>
+</div>

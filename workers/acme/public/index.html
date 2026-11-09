@@ -1,58 +1,17 @@
 <!DOCTYPE html>
-<html lang="en">
-
+<html lang="{{ html_lang }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description"
-    content="CFMS PKI automated certificate issuance. Connect an ACME client, verify domain ownership and manage certificate renewal.">
-  <title>CFMS PKI — ACME Certificate Service</title>
+  <meta name="description" content="{{ desc }}">
+  <title>{{ title }}</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
-
 <body>
   <div class="container">
-    <header class="masthead">
-      <a class="brand" href="/">CFMS PKI<span>Public Key Infrastructure</span></a>
-      <nav aria-label="Main navigation">
-        <a href="{{CRL_URL}}">CRL directory <span aria-hidden="true">↗</span></a>
-        <a href="https://github.com/cfms-dev/pki">Source &amp; documentation <span aria-hidden="true">↗</span></a>
-      </nav>
-    </header>
-    <main>
-      <section class="hero" aria-labelledby="page-title">
-        <p class="eyebrow">Automated certificate management</p>
-        <h1 id="page-title">Certificate issuance,<br>automated.</h1>
-        <p class="lead">The ACME service for CFMS PKI. Connect a compatible client to request certificates for domains
-          you control and automate their renewal.</p>
-      </section>
-      <section class="endpoint" aria-labelledby="directory-label">
-        <h2 class="eyebrow" id="directory-label">ACME directory URL</h2>
-        <a href="/directory"><code>/directory</code></a>
-        <p>Use this directory URL as your ACME client’s server address. It returns the protocol’s JSON directory; this
-          homepage introduces the service.</p>
-      </section>
-      <div class="details">
-        <section aria-labelledby="validation-title">
-          <p class="eyebrow">01 / Domain validation</p>
-          <h2 id="validation-title">Prove ownership. Issue a certificate.</h2>
-          <p>Use DNS-01 to validate a domain through a DNS TXT record, or HTTP-01 to serve a challenge over HTTP.
-            Wildcard certificates require DNS-01. Public IPv4 and IPv6 certificates use HTTP-01
-            and have a maximum validity of 160 hours; mixed domain/IP orders are supported.</p>
-          <p>Your ACME client handles account registration, validation and certificate retrieval through the directory
-            endpoint.</p>
-        </section>
-        <section aria-labelledby="lifecycle-title">
-          <p class="eyebrow">02 / Certificate lifecycle</p>
-          <h2 id="lifecycle-title">Keep certificates up to date.</h2>
-          <p>ACME clients can automate renewal and request revocation. The service also publishes ACME Renewal
-            Information (ARI) to help clients schedule renewals.</p>
-          <a href="{{CRL_URL}}">Browse certificate revocation lists <span aria-hidden="true">→</span></a>
-        </section>
-      </div>
-    </main>
-    <footer><span>CFMS PKI / ACME service</span><nav aria-label="Policies"><a href="/terms">Terms of service</a><a href="/privacy">Privacy policy</a></nav></footer>
+    {{ header }}
+    <main>{{ content }}</main>
+    {{ footer }}
   </div>
 </body>
-
 </html>

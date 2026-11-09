@@ -39,6 +39,7 @@ export default {
     // Assets normally bypass this Worker. Missing website resources must also
     // stay outside the ACME database and nonce/error paths.
     if (["/", "/index", "/index.html", "/terms", "/terms.html", "/privacy", "/privacy.html"].includes(path)
+      || path === "/zh-cn" || path.startsWith("/zh-cn/")
       || path.endsWith(".css") || path.startsWith("/images/")) {
       return env.ASSETS.fetch(request);
     }

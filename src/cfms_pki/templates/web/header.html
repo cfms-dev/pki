@@ -1,0 +1,15 @@
+<header class="masthead">
+  <a class="brand" href="{{ overview_href }}">CFMS PKI<span>{{ brand_description }}</span></a>
+  <nav class="main-nav" aria-label="{{ navigation_label }}">
+    <div class="nav-links">
+      <a href="{{ overview_href }}" aria-current="{{ overview_current }}">{{ overview_label }} <span aria-hidden="true">{{ overview_arrow }}</span></a>
+      <a href="{{ crl_href }}" aria-current="{{ crl_current }}">{{ crl_label }} <span aria-hidden="true">{{ crl_arrow }}</span></a>
+      <a href="{{ acme_href }}" aria-current="{{ acme_current }}">{{ acme_label }} <span aria-hidden="true">{{ acme_arrow }}</span></a>
+      <a href="https://github.com/cfms-dev/pki">{{ source_label }} <span aria-hidden="true">↗</span></a>
+    </div>
+    <a class="language-switch" href="{{ switch_href }}" lang="{{ switch_lang }}" hreflang="{{ switch_lang }}" aria-label="{{ switch_description }}">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a18 18 0 0 1 0 18 18 18 0 0 1 0-18Z"/></svg>
+      <span>{{ switch_label }}</span>
+    </a>
+  </nav>
+</header>

@@ -1,9 +1,11 @@
 """Generate static HTML distribution pages for Certificate Revocation Lists."""
 
 import hashlib
+import json
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib.resources import files
 from pathlib import Path
 
 from jinja2 import (
@@ -70,7 +72,7 @@ def build_crl_pages(
     """Build the GitHub Pages distribution site for CRLs.
 
     Copies .crl files to `<output_dir>/crl/`, creates `.nojekyll`,
-    and generates root `index.html` and `crl/index.html`.
+    and generates English and Simplified Chinese overview and directory pages.
     """
     output_dir = Path(output_dir)
     output_crl_dir = output_dir / "crl"
@@ -94,42 +96,56 @@ def build_crl_pages(
     now_utc = generated_at or datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     env = get_template_environment(template_dir)
-    template = env.get_template("index.html")
-
-    # Keep file metadata available to custom homepage templates.
-    root_crls = [
-        {
-            "name": f.name,
-            "size": f.formatted_size,
-            "sha256": f.sha256,
-            "href": f"crl/{f.name}",
-        }
-        for f in crl_files
-    ]
-    root_html = template.render(
-        title="CFMS PKI — Certificate Information",
-        desc="Certificate infrastructure, automated issuance and revocation list distribution for the CFMS ecosystem.",
-        crls=root_crls,
-        is_crl_subdir=False,
-        generated_at=now_utc,
-    )
-    (output_dir / "index.html").write_text(root_html, encoding="utf-8")
-
-    # Render crl/index.html (links pointing to direct filename <name>)
-    crl_crls = [
-        {
-            "name": f.name,
-            "size": f.formatted_size,
-            "sha256": f.sha256,
-            "href": f.name,
-        }
-        for f in crl_files
-    ]
-    crl_html = env.get_template("crl.html").render(
-        title="CFMS PKI CRL Directory",
-        desc="Download published CFMS PKI certificate revocation lists and compare SHA-256 checksums.",
-        crls=crl_crls,
-        is_crl_subdir=True,
-        generated_at=now_utc,
-    )
-    (output_crl_dir / "index.html").write_text(crl_html, encoding="utf-8")
+    for locale in ("en", "zh-cn"):
+        messages = json.loads(
+            files("cfms_pki")
+            .joinpath("templates", "web", locale, "messages.json")
+            .read_text(encoding="utf-8")
+        )
+        prefix = "" if locale == "en" else "zh-cn/"
+        acme_href = f"https://acme.cfms-pki.crpteam.club/{prefix}"
+        for page, template_name, relative_path in (
+            ("overview", "index.html", "index.html"),
+            ("crl", "crl.html", "crl/index.html"),
+        ):
+            destination = output_dir / prefix / relative_path
+            # Relative URLs preserve a GitHub Pages project prefix such as /pki/.
+            site_root = "../" * (len(destination.relative_to(output_dir).parts) - 1)
+            overview_href = f"{site_root}{prefix}" or "./"
+            crl_href = f"{site_root}{prefix}crl/"
+            alternate_prefix = "zh-cn/" if locale == "en" else ""
+            alternate_page = "crl/" if page == "crl" else ""
+            crls = [
+                {
+                    "name": f.name,
+                    "size": f.formatted_size,
+                    "sha256": f.sha256,
+                    "href": (
+                        f.name
+                        if page == "crl" and locale == "en"
+                        else f"{site_root}crl/{f.name}"
+                    ),
+                }
+                for f in crl_files
+            ]
+            html = env.get_template(template_name).render(
+                **messages,
+                title=messages[f"{page}_title"],
+                desc=messages[f"{page}_desc"],
+                locale=locale,
+                crls=crls,
+                is_crl_subdir=page == "crl",
+                generated_at=now_utc,
+                overview_href=overview_href,
+                crl_href=crl_href,
+                acme_href=acme_href,
+                switch_href=f"{site_root}{alternate_prefix}{alternate_page}",
+                overview_current="page" if page == "overview" else "false",
+                crl_current="page" if page == "crl" else "false",
+                acme_current="false",
+                overview_arrow="",
+                crl_arrow="",
+                acme_arrow="↗",
+            )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(html, encoding="utf-8")

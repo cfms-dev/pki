@@ -10,7 +10,7 @@ const env: AcmeEnv = {
 };
 
 describe("Website requests that reach the Worker", () => {
-  it.each(["/", "/index", "/index.html", "/terms", "/terms.html", "/privacy", "/privacy.html", "/styles.css", "/missing.css", "/images/missing.png"])("forwards %s unchanged, without D1 or ACME headers", async (path) => {
+  it.each(["/", "/index", "/index.html", "/terms", "/terms.html", "/privacy", "/privacy.html", "/styles.css", "/missing.css", "/images/missing.png", "/zh-cn", "/zh-cn/", "/zh-cn/index", "/zh-cn/index.html", "/zh-cn/terms", "/zh-cn/terms.html", "/zh-cn/privacy", "/zh-cn/privacy.html", "/zh-cn/missing"])("forwards %s unchanged, without D1 or ACME headers", async (path) => {
     const response = new Response(null, { status: 404, headers: { ETag: '"asset"' } });
     const assets = vi.spyOn(testAssets, "fetch").mockResolvedValue(response);
     const request = new Request(`https://website.test${path}?test=1`);

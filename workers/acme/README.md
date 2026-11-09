@@ -10,15 +10,25 @@ The ACME directory is served at `/directory` (for production:
 `https://acme.cfms-pki.crpteam.club/directory`).
 
 The root `/` serves an English HTML service overview, independently of D1.
+Simplified Chinese versions are available at `/zh-cn/`, `/zh-cn/terms` and
+`/zh-cn/privacy`. The globe link switches the current page's language; all
+website links preserve it. English remains the default, without browser
+scripts, language detection, cookies or preference storage.
 Use `/directory`, rather than the homepage, as your ACME client's server URL.
 Webpages use native Workers Assets handling for GET, HEAD, unsupported methods,
 redirects, caching and conditional requests. They do not receive the ACME API's
 Link, CORS or nonce headers, or a custom five-minute cache policy.
 
-Web sources live in `public/`. `npm run build:website` copies them to the ignored
-`dist/website/` output and substitutes the HTML-escaped `CONFIG.CRL_BASE_URL` in
-the homepage at build time. The source template is never overwritten. Change
-that setting and rebuild/redeploy to update the published CRL links.
+Page shells and optional static assets live in `public/`. Shared navigation,
+CSS and English/Chinese content live in `../../src/cfms_pki/templates/web/`,
+which is also packaged with the Python CRL site generator. Run website builds
+from a checkout that contains these shared resources.
+`npm run build:website` renders both languages into the ignored `dist/website/`
+output, escaping text and URLs before inserting trusted local HTML fragments.
+Source templates are never overwritten. `CONFIG.CRL_BASE_URL` supplies the
+English CRL directory link; its parent supplies the PKI overview root and
+localized browsing links (for example, `/pki/crl/` gives `/pki/` and
+`/pki/zh-cn/crl/`). Change that setting and rebuild/redeploy to update links.
 `npm run build` builds both CA assets and the website; Wrangler runs it before
 local development, type generation and deployment, including dry runs.
 
@@ -31,7 +41,7 @@ value overrides that origin. No nonempty base URL is required to build the site.
 Wrangler serves `dist/website/` with asset-first routing and
 `html_handling = "auto-trailing-slash"`. Canonical pages are `/`, `/terms` and
 `/privacy`, with shared styles at `/styles.css`. `/index.html` and the policy
-`.html` aliases use Assets' native redirects. There is no SPA fallback or browser
+`.html` aliases, including Chinese page aliases, use Assets' native redirects. There is no SPA fallback or browser
 script. Missing CSS/images and website requests that reach the Worker are
 forwarded unchanged to `ASSETS.fetch()` before database initialization, without
 ACME nonce generation or template rendering.

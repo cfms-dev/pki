@@ -1,0 +1,24 @@
+<section class="hero" aria-labelledby="page-title">
+  <p class="eyebrow">自动化证书管理</p>
+  <h1 id="page-title">证书签发，<br>自动完成。</h1>
+  <p class="lead">CFMS PKI 的 ACME 服务。连接兼容的客户端，为您控制的域名申请证书，并自动完成续期。</p>
+</section>
+<section class="endpoint" aria-labelledby="directory-label">
+  <h2 class="eyebrow" id="directory-label">ACME 目录地址</h2>
+  <a href="/directory"><code>/directory</code></a>
+  <p>将此目录地址用作 ACME 客户端的服务器地址。它返回协议使用的 JSON 目录；本主页提供服务介绍。</p>
+</section>
+<div class="details">
+  <section aria-labelledby="validation-title">
+    <p class="eyebrow">01 / 域名验证</p>
+    <h2 id="validation-title">验证控制权，签发证书。</h2>
+    <p>通过 DNS TXT 记录完成 DNS-01 验证，或通过 HTTP 提供质询响应以完成 HTTP-01 验证。通配符证书必须使用 DNS-01。公网 IPv4 和 IPv6 地址证书使用 HTTP-01，有效期最长为 160 小时；支持同时包含域名与 IP 地址的订单。</p>
+    <p>ACME 客户端通过目录端点处理账户注册、验证与证书获取。</p>
+  </section>
+  <section aria-labelledby="lifecycle-title">
+    <p class="eyebrow">02 / 证书生命周期</p>
+    <h2 id="lifecycle-title">让证书保持有效。</h2>
+    <p>ACME 客户端可以自动续期并申请吊销证书。服务还发布 ACME 续期信息（ARI），帮助客户端安排续期时间。</p>
+    <a href="{{ crl_href }}">浏览证书吊销列表 <span aria-hidden="true">→</span></a>
+  </section>
+</div>

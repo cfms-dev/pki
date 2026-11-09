@@ -6,6 +6,7 @@ name: ACME Worker CI
       - main
     paths:
       - 'workers/acme/**'
+      - 'src/cfms_pki/templates/web/**'
       - 'workers/.gitignore'
       - 'registry/**'
       - 'certs/**'
@@ -15,6 +16,7 @@ name: ACME Worker CI
       - main
     paths:
       - 'workers/acme/**'
+      - 'src/cfms_pki/templates/web/**'
       - 'workers/.gitignore'
       - 'registry/**'
       - 'certs/**'

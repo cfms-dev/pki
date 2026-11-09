@@ -1,0 +1,23 @@
+<p class="nav-back"><a href="{{ overview_href }}">← 返回概览</a></p>
+<section class="hero" aria-labelledby="page-title">
+  <p class="eyebrow">证书吊销列表</p>
+  <h1 id="page-title">CRL 目录。</h1>
+  <p class="lead">CFMS PKI 已发布的证书吊销列表。下载文件或核对 SHA-256 校验和，确认下载内容与本次发布一致。</p>
+</section>
+<section class="directory" aria-label="已发布的 CRL 文件">
+  <table>
+    <thead><tr><th scope="col">CRL 文件</th><th scope="col">大小</th><th scope="col">SHA-256 校验和</th><th scope="col">操作</th></tr></thead>
+    <tbody>
+      {% for crl in crls %}
+      <tr>
+        <td data-label="CRL 文件"><a href="{{ crl.href }}"><code>{{ crl.name }}</code></a></td>
+        <td data-label="大小">{{ crl.size }}</td>
+        <td data-label="SHA-256 校验和"><code class="hash">{{ crl.sha256 }}</code></td>
+        <td><a href="{{ crl.href }}" class="btn" download>下载</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">暂无可用的 CRL 文件。</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>

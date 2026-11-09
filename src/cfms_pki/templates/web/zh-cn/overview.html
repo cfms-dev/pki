@@ -1,0 +1,24 @@
+<section class="hero" aria-labelledby="page-title">
+  <p class="eyebrow">证书信息与分发</p>
+  <h1 id="page-title">公钥基础设施，<br>清晰呈现。</h1>
+  <p class="lead">CFMS PKI 为 CFMS 生态管理证书颁发机构、自动化证书签发与吊销信息。本站提供证书吊销列表的分发服务。</p>
+</section>
+<section class="endpoint" aria-labelledby="crl-label">
+  <h2 class="eyebrow" id="crl-label">证书吊销列表</h2>
+  <a href="{{ crl_href }}">浏览 CRL 目录 <span aria-hidden="true">→</span></a>
+  <p>下载已发布的 CRL 文件，查看文件大小并核对 SHA-256 校验和。证书验证软件仍可使用现有文件直链。</p>
+</section>
+<div class="details">
+  <section aria-labelledby="revocation-title">
+    <p class="eyebrow">01 / 吊销信息</p>
+    <h2 id="revocation-title">及时了解证书吊销状态。</h2>
+    <p>证书吊销列表（CRL）是由证书颁发机构签名的记录，列出其在到期前已吊销的证书。</p>
+    <p>证书验证软件可以通过证书中记录的分发点获取 CRL。已发布的列表会自动生成和更新。</p>
+  </section>
+  <section aria-labelledby="issuance-title">
+    <p class="eyebrow">02 / 自动化签发</p>
+    <h2 id="issuance-title">通过 ACME 申请与续期。</h2>
+    <p>使用兼容 ACME 的客户端，为您控制的域名申请证书。服务概览提供域名验证与客户端连接说明。</p>
+    <a href="{{ acme_href }}">了解 ACME 服务 <span aria-hidden="true">→</span></a>
+  </section>
+</div>

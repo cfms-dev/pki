@@ -1,87 +1,17 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ html_lang }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="How the CFMS PKI ACME service handles account, domain and certificate data.">
-  <title>Privacy policy — CFMS PKI</title>
+  <meta name="description" content="{{ desc }}">
+  <title>{{ title }}</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <div class="container">
-    <header class="masthead">
-      <a class="brand" href="/">CFMS PKI<span>Public Key Infrastructure</span></a>
-      <nav aria-label="Main navigation">
-        <a href="/">Service overview</a>
-        <a href="/terms">Terms of service</a>
-      </nav>
-    </header>
-    <main>
-      <section class="hero" aria-labelledby="page-title">
-        <p class="eyebrow">Service policies · Updated 9 November 2026</p>
-        <h1 id="page-title">Privacy policy</h1>
-        <p class="lead">Data used to operate certificate issuance, validation and account management.</p>
-      </section>
-      <div class="policy-content">
-        <section aria-labelledby="records">
-          <h2 id="records">Service records</h2>
-          <p>The ACME service stores operational records in Cloudflare D1. Depending on your requests, these include:</p>
-          <ul>
-            <li>Account identifiers, public keys and key fingerprints, optional contact information, account status,
-              creation time and the URL of agreed terms when consent is enabled.</li>
-            <li>Requested domain names, orders, authorization and challenge tokens, validation status, errors and
-              timestamps, plus counters used to enforce rate limits.</li>
-            <li>Issued certificate contents, serial numbers, domain names, validity periods, issuing CA references,
-              account associations, renewal relationships and revocation status or reasons.</li>
-          </ul>
-          <p>Your account and certificate private keys remain with your client; normal ACME requests supply public
-            keys, signatures and certificate signing requests. The service separately uses its configured CA signing
-            keys to issue certificates.</p>
-        </section>
-        <section aria-labelledby="purpose">
-          <h2 id="purpose">Why these records are used</h2>
-          <p>Records support request authentication, replay prevention, proof of domain control, issuance, renewal
-            information, revocation, abuse limits and account or terms management. Certificate and revocation
-            information is intended to be shared with parties that need to validate certificates; do not treat
-            domain names included in a certificate as confidential.</p>
-        </section>
-        <section aria-labelledby="providers">
-          <h2 id="providers">Infrastructure and validation services</h2>
-          <p>Cloudflare Workers processes requests and serves these pages, Workers Assets stores the web resources,
-            and D1 stores ACME records. Cloudflare also processes network and request information as the
-            infrastructure provider. See <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare's privacy policy</a>
-            for its own practices.</p>
-          <p>Domain validation makes DNS-over-HTTPS queries, including through Cloudflare and Google resolvers.
-            IP validation connects directly to the public IP over TCP, without an initial DNS lookup. HTTP-01
-            requests expose the challenge token and key authorization exchange to the target; redirects may
-            contact additional public IPs or domains. HTTPS targets use certificate-verified TLS.
-            These queries disclose the queried names to the resolver. HTTP-01 validation contacts the domain's web
-            server and may follow permitted redirects, disclosing challenge paths to the contacted servers.
-            CAA lookups are also used to check certificate issuance permissions.</p>
-        </section>
-        <section aria-labelledby="logs">
-          <h2 id="logs">Logs and website features</h2>
-          <p>The checked-in configuration disables observability overall while retaining settings for persisted
-            Cloudflare invocation logs and traces. Collection depends on the active deployment settings. Application
-            error logging uses limited diagnostic fields, such as an error reference, path and error type, rather
-            than intentionally logging private keys or complete ACME request bodies. If infrastructure logging is
-            enabled, its logs may contain additional request metadata.</p>
-          <p>These pages contain no browser scripts, analytics integrations or application-set cookies. Following
-            links to GitHub, Cloudflare or another site makes a request to that site, whose own policies apply.</p>
-        </section>
-        <section aria-labelledby="management">
-          <h2 id="management">Account changes and stored data</h2>
-          <p>You can update contact information and deactivate an account through ACME. Deactivation does not delete
-            the account, related orders or certificate records. The current implementation does not provide a
-            general account-data deletion endpoint or a fixed automatic retention schedule for these records.</p>
-          <p>Service data is not automatically removed merely because a certificate or order expires. This policy
-            does not promise a fixed retention period or deletion deadline. For project information, use the
-            <a href="https://github.com/cfms-dev/pki">source repository</a>; do not include sensitive account data in
-            public discussions.</p>
-        </section>
-      </div>
-    </main>
-    <footer><span>CFMS PKI / ACME service</span><nav aria-label="Policies"><a href="/">Home</a><a href="/terms">Terms of service</a><a href="/privacy" aria-current="page">Privacy policy</a></nav></footer>
+    {{ header }}
+    <main>{{ content }}</main>
+    {{ footer }}
   </div>
 </body>
 </html>
