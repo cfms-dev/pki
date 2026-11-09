@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Fetch the start timestamp of the last successful CRL workflow run from GitHub Actions API."""
 
 import argparse

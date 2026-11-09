@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 // Copy public CA certificates and generate the Worker's manifest from registry/ca.json.
 import fs from "node:fs";
 import path from "node:path";
