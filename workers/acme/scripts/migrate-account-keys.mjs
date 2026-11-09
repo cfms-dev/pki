@@ -9,11 +9,20 @@ const result = await build({
   bundle: true, write: false, platform: "node", format: "esm",
 });
 const { Database, migrateAccountPublicKeyFingerprints } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`);
-const database = new Database(d1Client());
-await database.initSchema();
-while (true) {
-  const summary = await migrateAccountPublicKeyFingerprints(database);
-  console.log(JSON.stringify(summary));
-  if (summary.remaining === 0) break;
-  if (summary.scanned === 0) throw new Error("Unresolved account_key_conflicts; repair public keys/conflicts and rerun");
+try {
+  const database = new Database(d1Client());
+  while (true) {
+    const summary = await migrateAccountPublicKeyFingerprints(database);
+    console.log(JSON.stringify(summary));
+    if (summary.remaining === 0) break;
+    if (summary.scanned === 0) {
+      console.error(JSON.stringify({ event: "acme_account_key_conflicts_unresolved" }));
+      process.exitCode = 1;
+      break;
+    }
+  }
+} catch {
+  // Drizzle errors can contain SQL and bound JWKs. Never print them.
+  console.error(JSON.stringify({ event: "acme_account_key_migration_failed" }));
+  process.exitCode = 1;
 }

@@ -1,7 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
+import { readMigrations } from "../scripts/migrations.mjs";
 
-export function createMockD1Database(): D1Database {
+export function createMockD1Database(migrate = true): D1Database {
   const db = new DatabaseSync(":memory:");
+  if (migrate) for (const migration of readMigrations()) db.exec(migration.sql);
   let pendingBatch: Promise<unknown> = Promise.resolve();
 
   return {
@@ -41,6 +43,18 @@ function createPreparedStatement(
   query: string,
   params: unknown[]
 ): D1PreparedStatement {
+  function execute<T>(): D1Result<T> {
+    const stmt = db.prepare(query);
+    const before = Number(db.prepare("SELECT total_changes() AS n").get()!.n);
+    const results = stmt.columns().length ? stmt.all(...(params as any[])) as T[] : [];
+    if (!stmt.columns().length) stmt.run(...(params as any[]));
+    const changes = Number(db.prepare("SELECT total_changes() AS n").get()!.n) - before;
+    return {
+      results, success: true,
+      meta: { changes, last_row_id: Number(db.prepare("SELECT last_insert_rowid() AS n").get()!.n),
+        duration: 0, rows_read: results.length, rows_written: changes },
+    } as D1Result<T>;
+  }
   return {
     bind(...newParams: unknown[]): D1PreparedStatement {
       return createPreparedStatement(db, query, newParams);
@@ -54,36 +68,11 @@ function createPreparedStatement(
       }
       return row as T;
     },
-    async all<T = unknown>(): Promise<D1Result<T>> {
-      const stmt = db.prepare(query);
-      const results = stmt.all(...(params as any[])) as T[];
-      return {
-        results,
-        success: true,
-        meta: {
-          duration: 0,
-          rows_read: results.length,
-          rows_written: 0,
-        },
-      } as unknown as D1Result<T>;
-    },
-    async run<T = unknown>(): Promise<D1Result<T>> {
-      const stmt = db.prepare(query);
-      const result = stmt.run(...(params as any[]));
-      return {
-        results: [],
-        success: true,
-        meta: {
-          changes: Number(result.changes),
-          last_row_id: Number(result.lastInsertRowid),
-          duration: 0,
-          rows_read: 0,
-          rows_written: Number(result.changes),
-        },
-      } as unknown as D1Result<T>;
-    },
+    async all<T = unknown>(): Promise<D1Result<T>> { return execute<T>(); },
+    async run<T = unknown>(): Promise<D1Result<T>> { return execute<T>(); },
     async raw<T = unknown>(): Promise<T[]> {
       const stmt = db.prepare(query);
+      stmt.setReturnArrays(true);
       return stmt.all(...(params as any[])) as T[];
     },
   } as unknown as D1PreparedStatement;

@@ -44,7 +44,6 @@ describe("RFC 8555 termsOfService and Optional Directory Fields", () => {
 
     const d1 = createMockD1Database();
     const database = new Database(d1);
-    await database.initSchema();
 
     mockCaCertificate(caCertPem);
     env = {

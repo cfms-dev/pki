@@ -1,3 +1,4 @@
+import { isUniqueConstraintError } from "../db/errors";
 import {
   calculateJwkThumbprint,
   JwsFlattened,
@@ -28,13 +29,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isUniqueConstraintError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    /UNIQUE constraint failed/i.test(message) ||
-    /SQLITE_CONSTRAINT_UNIQUE/i.test(message)
-  );
-}
+
 
 function decodeBase64UrlJson(value: string, label: string): unknown {
   try {

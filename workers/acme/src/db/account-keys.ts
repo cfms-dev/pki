@@ -1,3 +1,4 @@
+import { isUniqueConstraintError } from "./errors";
 import { AccountRow } from "./types";
 import { Database, isAccountFingerprintIndexSql } from "./queries";
 import { AcmeError } from "../errors";
@@ -29,13 +30,7 @@ const MIGRATION_BATCH_SIZE = 50;
 // resumes batches until complete. Public requests never perform backfills.
 const MIGRATION_MAX_BATCHES = 1;
 
-function isUniqueConstraintError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    /UNIQUE constraint failed/i.test(message) ||
-    /SQLITE_CONSTRAINT_UNIQUE/i.test(message)
-  );
-}
+
 
 async function assertAccountFingerprintIndex(database: Database): Promise<void> {
   let index: { name: string; sql: string | null } | null;

@@ -1,26 +1,28 @@
+import { readMigrations } from "../scripts/migrations.mjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { d1Client } from "../scripts/d1-client.mjs";
 import { Database } from "../src/db/queries";
 import { migrateAccountPublicKeyFingerprints } from "../src/db/account-keys";
+import { isUniqueConstraintError } from "../src/db/errors";
 
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 describe("D1 management API adapter", () => {
-  it("uses the documented batch envelope and resumes a legacy key migration", async () => {
+  it("maps Drizzle results, batches and errors and resumes an account data backfill", async () => {
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account");
     vi.stubEnv("CLOUDFLARE_D1_DATABASE_ID", "database");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "test-token");
     const sqlite = new DatabaseSync(":memory:");
-    sqlite.exec("CREATE TABLE accounts (id TEXT PRIMARY KEY, jwk TEXT NOT NULL, thumbprint TEXT UNIQUE NOT NULL, contact TEXT, status TEXT NOT NULL, created_at INTEGER NOT NULL)");
+    for (const migration of readMigrations()) sqlite.exec(migration.sql);
     const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
-    sqlite.prepare("INSERT INTO accounts VALUES (?, ?, ?, NULL, 'valid', 1)").run("legacy", JSON.stringify(await crypto.subtle.exportKey("jwk", keys.publicKey)), "legacy-thumbprint");
-    let batches = 0;
+    sqlite.prepare("INSERT INTO accounts (id, jwk, thumbprint, status, created_at) VALUES (?, ?, ?, 'valid', 1)").run("legacy", JSON.stringify(await crypto.subtle.exportKey("jwk", keys.publicKey)), "legacy-thumbprint");
+
     vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
       const body = JSON.parse(init.body);
       expect(Array.isArray(body)).toBe(false);
       const statements = body.batch ?? [body];
-      if (body.batch) batches++;
+
       sqlite.exec("BEGIN");
       try {
         const result = statements.map(({ sql, params }) => {
@@ -39,12 +41,31 @@ describe("D1 management API adapter", () => {
     }));
     try {
       const database = new Database(d1Client());
-      await database.initSchema();
-      expect(batches).toBeGreaterThan(0);
+      const adapter = d1Client();
+      expect(await adapter.prepare("SELECT 2 AS second, 1 AS first").raw()).toEqual([[2, 1]]);
+      expect(await adapter.prepare("SELECT id FROM accounts WHERE id = ?").bind("missing").raw()).toEqual([]);
+      expect(await adapter.prepare("UPDATE accounts SET contact = ? WHERE id = ? RETURNING contact")
+        .bind("contact", "legacy").raw()).toEqual([["contact"]]);
+      const batch = await adapter.batch([
+        adapter.prepare("INSERT INTO nonces VALUES (?, ?)").bind("rest-nonce", 2),
+        adapter.prepare("SELECT nonce FROM nonces"),
+      ]);
+      expect(batch[0].meta.changes).toBe(1);
+      expect(batch[1].results).toEqual([{ nonce: "rest-nonce" }]);
+      await expect(adapter.batch([
+        adapter.prepare("DELETE FROM nonces"),
+        adapter.prepare("INSERT INTO accounts (id, jwk, thumbprint, status, created_at) VALUES ('legacy', '{}', 'duplicate', 'valid', 1)"),
+      ])).rejects.toThrow("UNIQUE constraint failed");
+      expect(await adapter.prepare("SELECT nonce FROM nonces").first("nonce")).toBe("rest-nonce");
       const summary = await migrateAccountPublicKeyFingerprints(database);
       expect(summary).toMatchObject({ updated: 1, remaining: 0 });
       expect(await migrateAccountPublicKeyFingerprints(database)).toMatchObject({ scanned: 0, remaining: 0 });
       expect((await database.getAccountById("legacy")).thumbprint).toBe("legacy-thumbprint");
+      expect(await database.getAccountById("missing")).toBeNull();
+      await expect(database.saveAccount({ id: "legacy", jwk: "{}", thumbprint: "duplicate", status: "valid", created_at: 1 }))
+        .rejects.toSatisfy(isUniqueConstraintError);
+      vi.stubGlobal("fetch", async () => new Response("private remote error", { status: 503 }));
+      await expect(adapter.prepare("SELECT 1").raw()).rejects.toThrow("D1 query failed (HTTP 503)");
     } finally { sqlite.close(); }
   });
 });

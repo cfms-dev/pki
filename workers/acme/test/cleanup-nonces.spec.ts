@@ -6,9 +6,9 @@ it("runs the nonce cleanup CLI through the REST adapter against a disposable SQL
   const source = `
     import assert from 'node:assert/strict';
     import { DatabaseSync } from 'node:sqlite';
-    import { readFileSync } from 'node:fs';
+    import { readMigrations } from ${JSON.stringify(new URL("../scripts/migrations.mjs", import.meta.url).href)};
     const db = new DatabaseSync(':memory:');
-    db.exec(readFileSync('schema.sql', 'utf8'));
+    for (const migration of readMigrations()) db.exec(migration.sql);
     const now = Math.floor(Date.now()/1000);
     db.prepare('INSERT INTO nonces VALUES (?, ?)').run('expired', now-1);
     db.prepare('INSERT INTO nonces VALUES (?, ?)').run('live', now+300);

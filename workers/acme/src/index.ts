@@ -16,21 +16,10 @@ import { handleRevokeCert } from "./routes/revoke";
 import { handleRenewalInfo } from "./routes/ari";
 import { checkIngress } from "./ratelimit/ingress";
 
-const schemaInit = new WeakMap<D1Database, Promise<void>>();
-function ensureSchema(database: Database, binding: D1Database): Promise<void> {
-  let pending = schemaInit.get(binding);
-  if (!pending) {
-    pending = database.initSchema().catch((error: unknown) => { schemaInit.delete(binding); throw error; });
-    schemaInit.set(binding, pending);
-  }
-  return pending;
-}
-
 export default {
   async scheduled(_event: ScheduledController, env: AcmeEnv, _ctx: ExecutionContext): Promise<void> {
     const database = new Database(env.DB);
     try {
-      await ensureSchema(database, env.DB);
       const result = await database.cleanupExpiredNonces();
       console.log(JSON.stringify({ event: result.backlog ? "acme_nonce_cleanup_backlog" : "acme_nonce_cleanup", ...result }));
     } catch {
@@ -88,7 +77,6 @@ export default {
     }
     const database = new Database(env.DB);
     try {
-      await ensureSchema(database, env.DB);
       const response = await routeRequest(request, path, database, baseUrl, env);
 
       // In RFC 8555 § 6.5.1, the server MUST include Replay-Nonce on POST responses

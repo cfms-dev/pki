@@ -128,7 +128,7 @@ export async function handleNewOrder(
     is_ari_renewal: isAriRenewal ? 1 : 0,
     created_at: now,
     expires_at: expiresAt,
-    certificate_id: null,
+    certificate_id: null, processing_started_at: null, finalize_generation: 0,
   };
 
   await database.saveOrder(order);

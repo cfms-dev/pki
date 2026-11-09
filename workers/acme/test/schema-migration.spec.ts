@@ -18,7 +18,7 @@ function makeOrder(id: string, domain: string, status: OrderRow["status"]): Orde
     is_ari_renewal: 0,
     created_at: now,
     expires_at: now + 3600,
-    certificate_id: null,
+    certificate_id: null, processing_started_at: null, finalize_generation: 0,
   };
 }
 
@@ -32,6 +32,7 @@ function makeAuthz(
     id,
     order_id: orderId,
     identifier_value: domain,
+    identifier_type: "dns",
     status,
     token: "t".repeat(22),
     expires_at: now + 3600,
@@ -39,94 +40,9 @@ function makeAuthz(
   };
 }
 
-async function challengeColumns(d1: D1Database): Promise<string[]> {
-  const result = await d1
-    .prepare("PRAGMA table_info(challenges)")
-    .all<{ name: string }>();
-  return (result.results || []).map((row) => row.name);
-}
-
-describe("challenges table deployment migration", () => {
-  it("creates the challenges table with a generation column for a pre-HTTP-01 database", async () => {
-    const d1 = createMockD1Database();
-    // Minimal pre-existing schema: no challenges table and no
-    // accounts.terms_of_service column.
-    await d1.exec(`
-      CREATE TABLE accounts (
-        id TEXT PRIMARY KEY,
-        jwk TEXT NOT NULL,
-        thumbprint TEXT UNIQUE NOT NULL,
-        contact TEXT,
-        status TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-    `);
-
-    const database = new Database(d1);
-    await database.initSchema();
-
-    expect(await challengeColumns(d1)).toContain("validation_generation");
-
-    // The new column must be usable through the normal insert path.
-    await database.saveChallenge({
-      id: "challenge-1",
-      authorization_id: "authz-1",
-      type: "http-01",
-      token: "t".repeat(22),
-      status: "pending",
-      error: null,
-      validated_at: null,
-      processing_started_at: null,
-      validation_generation: 0,
-      created_at: now,
-    });
-    expect((await database.getChallengeById("challenge-1"))?.validation_generation).toBe(
-      0
-    );
-  });
-
-  it("adds the generation column to a challenges table created by an earlier deployment", async () => {
-    const d1 = createMockD1Database();
-    await d1.exec(`
-      CREATE TABLE challenges (
-        id TEXT PRIMARY KEY,
-        authorization_id TEXT NOT NULL,
-        type TEXT NOT NULL,
-        token TEXT NOT NULL,
-        status TEXT NOT NULL,
-        error TEXT,
-        validated_at INTEGER,
-        processing_started_at INTEGER,
-        created_at INTEGER NOT NULL,
-        UNIQUE (authorization_id, type)
-      );
-      INSERT INTO challenges (id, authorization_id, type, token, status, created_at)
-      VALUES ('old-challenge', 'old-authz', 'dns-01', '${"t".repeat(22)}', 'pending', ${now});
-    `);
-
-    const database = new Database(d1);
-    await database.initSchema();
-    expect(await challengeColumns(d1)).toContain("validation_generation");
-
-    // Rows that predate the column are backfilled by the DEFAULT 0 and can be
-    // claimed normally.
-    expect((await database.getChallengeById("old-challenge"))?.validation_generation).toBe(
-      0
-    );
-    expect(
-      await database.claimChallengeForValidation("old-challenge", now, now - 60)
-    ).toBe(1);
-
-    // initSchema must be idempotent, including the ALTER TABLE migration.
-    await database.initSchema();
-    expect(await challengeColumns(d1)).toContain("validation_generation");
-  });
-});
-
 describe("legacy order compatibility", () => {
   it("lazily creates both challenges for a pending legacy authorization", async () => {
     const database = new Database(createMockD1Database());
-    await database.initSchema();
 
     const order = makeOrder("legacy-order", "legacy.example.com", "pending");
     const authz = makeAuthz(
@@ -156,7 +72,6 @@ describe("legacy order compatibility", () => {
 
   it("offers only dns-01 for a pending legacy wildcard authorization", async () => {
     const database = new Database(createMockD1Database());
-    await database.initSchema();
 
     const order = makeOrder("wildcard-order", "*.example.com", "pending");
     const authz = makeAuthz(
@@ -174,7 +89,6 @@ describe("legacy order compatibility", () => {
 
   it("preserves a valid legacy authorization as a valid dns-01 challenge", async () => {
     const database = new Database(createMockD1Database());
-    await database.initSchema();
 
     const order = makeOrder("valid-order", "valid.example.com", "ready");
     const authz = makeAuthz("valid-authz", order.id, "valid.example.com", "valid");
@@ -195,7 +109,6 @@ describe("legacy order compatibility", () => {
 
   it("records an invalid legacy authorization as an invalid dns-01 challenge", async () => {
     const database = new Database(createMockD1Database());
-    await database.initSchema();
 
     const order = makeOrder("invalid-order", "invalid.example.com", "invalid");
     const authz = makeAuthz(

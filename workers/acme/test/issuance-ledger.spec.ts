@@ -11,20 +11,21 @@ let d1: D1Database;
 let db: Database;
 
 beforeEach(async () => {
-  d1 = createMockD1Database(); db = new Database(d1); await db.initSchema();
+  d1 = createMockD1Database(); db = new Database(d1);
   await db.saveAccount({ id: "owner", jwk: "{}", thumbprint: "owner", contact: null, status: "valid", created_at: now });
 });
 
 async function ready(names = ["victim.example.com"], predecessor: string | null = null) {
   const id = crypto.randomUUID();
   const cert: CertificateRow = {
+      ca_id: null,
     id: crypto.randomUUID(), cert_id: crypto.randomUUID(), serial_number: "01", aki: "01", subject: "CN=test",
     san: JSON.stringify(names), pem: "test-public-certificate", not_before: now, not_after: now + 86400,
     account_id: "owner", created_at: now, revoked_at: null, revocation_reason: null, replaced_by_cert_id: null,
   };
   const order: OrderRow = { id, account_id: "owner", status: "ready", identifiers: cert.san,
     not_before: null, not_after: null, replaces_cert_id: predecessor, is_ari_renewal: predecessor ? 1 : 0,
-    created_at: now, expires_at: now + 3600, certificate_id: null };
+    created_at: now, expires_at: now + 3600, certificate_id: null, processing_started_at: null, finalize_generation: 0 };
   await db.saveOrder(order);
   for (const name of names) await db.saveAuthorization({ id: crypto.randomUUID(), order_id: id,
     identifier_value: name, identifier_type: "dns", status: "valid", token: "test", expires_at: now + 3600, created_at: now });

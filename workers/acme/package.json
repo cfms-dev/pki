@@ -21,14 +21,20 @@
     "cleanup:nonces": "node scripts/cleanup-nonces.mjs",
     "migrate:account-keys": "node scripts/migrate-account-keys.mjs",
     "test:runtime": "node scripts/runtime-smoke.mjs",
-    "build:llhttp": "node scripts/build-llhttp.mjs"
+    "build:llhttp": "node scripts/build-llhttp.mjs",
+    "db:generate": "drizzle-kit generate",
+    "db:check": "node scripts/check-migrations.mjs",
+    "db:migrate:local": "wrangler d1 migrations apply cfms-acme-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply cfms-acme-db --remote"
   },
   "dependencies": {
     "@peculiar/x509": "^3.1.0",
+    "drizzle-orm": "0.45.4",
     "reflect-metadata": "^0.2.2"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "drizzle-kit": "0.31.11",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "undici": "8.12.4",
@@ -39,5 +45,10 @@
   "allowScripts": {
     "esbuild": true,
     "workerd": true
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "$esbuild"
+    }
   }
 }

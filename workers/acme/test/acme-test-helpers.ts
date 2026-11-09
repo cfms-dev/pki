@@ -70,7 +70,6 @@ export async function createTestEnvironment(): Promise<TestEnvironment> {
 
   const d1 = createMockD1Database();
   const database = new Database(d1);
-  await database.initSchema();
 
   const caFixture = mockCaCertificate(ca.certPem);
   const env: AcmeEnv = {

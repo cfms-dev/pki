@@ -27,6 +27,10 @@ export function d1Client() {
       async run() { return (await execute([{ sql, params }]))[0]; },
       async all() { return this.run(); },
       async first(column) { const row = (await this.run()).results[0]; return row ? (column ? row[column] : row) : null; },
+      async raw() {
+        const rows = (await this.run()).results;
+        return rows.map((row) => Object.values(row));
+      },
     };
   }
   return { prepare: statement, batch: (statements) => execute(statements.map(({ sql, params }) => ({ sql, params }))) };

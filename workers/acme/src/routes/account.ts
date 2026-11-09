@@ -1,3 +1,4 @@
+import { isUniqueConstraintError } from "../db/errors";
 import { AcmeEnv, getTermsOfServiceUrl } from "../config";
 import {
   normalizePublicKey,
@@ -15,13 +16,7 @@ interface NewAccountPayload {
   onlyReturnExisting?: boolean;
 }
 
-function isUniqueConstraintError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    /UNIQUE constraint failed/i.test(message) ||
-    /SQLITE_CONSTRAINT_UNIQUE/i.test(message)
-  );
-}
+
 
 /**
  * Returns an existing account object and applies the RFC 8555 § 7.3.3 terms

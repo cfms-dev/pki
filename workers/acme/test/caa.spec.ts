@@ -685,7 +685,6 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
     beforeEach(async () => {
       d1 = createMockD1Database();
       database = new Database(d1);
-      await database.initSchema();
 
       accountKeys = (await crypto.subtle.generateKey(
         { name: "ECDSA", namedCurve: "P-256" },

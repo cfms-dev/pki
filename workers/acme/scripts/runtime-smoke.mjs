@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import * as x509 from "@peculiar/x509";
+import { migrationStatements } from "./migrations.mjs";
 
 // Use the exact runtime selected by Wrangler rather than an older independent
 // Miniflare release. All state and generated keys are disposable local fixtures.
@@ -148,9 +149,12 @@ try {
     const signature = b64(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, accountKeys.privateKey, Buffer.from(`${protectedHeader}.${encoded}`)));
     return runtime.dispatchFetch(url, { method: "POST", headers: { "Content-Type": "application/jose+json" }, body: JSON.stringify({ protected: protectedHeader, payload: encoded, signature }) });
   }
-  // Begin with a legacy schema to exercise the actual D1 upgrade path.
+  // Migrations run before traffic; requests must never initialize the schema.
   const db = await runtime.getD1Database("DB");
-  await db.exec("CREATE TABLE accounts (id TEXT PRIMARY KEY, jwk TEXT NOT NULL, thumbprint TEXT UNIQUE NOT NULL, contact TEXT, status TEXT NOT NULL, created_at INTEGER NOT NULL)");
+  const uninitialized = await runtime.dispatchFetch(`${base}/new-nonce`, { method: "HEAD" });
+  assert.equal(uninitialized.status, 500);
+  assert.equal((await db.prepare("SELECT name FROM sqlite_master WHERE name = 'accounts'").all()).results.length, 0);
+  await db.batch(migrationStatements().map((statement) => db.prepare(statement)));
   const account = await post(`${base}/new-account`, {}, true);
   assert.equal(account.status, 201, await account.clone().text());
   kid = account.headers.get("Location");
@@ -301,7 +305,7 @@ try {
     assert.ok(check.request.includes(`Host: ${authority}\r\n`));
     if (!check.expected) assert.equal(check.result.errorType, "incorrectResponse");
   }
-  console.log("Workers runtime smoke passed: Assets, legacy D1 migration, DNS/IPv4/IPv6/mixed issuance, atomic issuance ledger, native ingress limits, scheduled nonce cleanup, signatures, validity, ARI, compiled llhttp WASM and socket parsing");
+  console.log("Workers runtime smoke passed: Assets, explicit D1 migrations, DNS/IPv4/IPv6/mixed issuance, atomic issuance ledger, native ingress limits, scheduled nonce cleanup, signatures, validity, ARI, compiled llhttp WASM and socket parsing");
 } finally {
   if (parserRuntime) await parserRuntime.dispose();
   if (runtime) await runtime.dispose();

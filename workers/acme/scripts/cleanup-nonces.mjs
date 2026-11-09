@@ -11,7 +11,6 @@ const result = await build({
 const { Database } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`);
 try {
   const database = new Database(d1Client());
-  await database.initSchema();
   console.log(JSON.stringify(await database.cleanupExpiredNonces()));
 } catch {
   // Never print remote errors or credentials.

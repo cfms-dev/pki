@@ -35,6 +35,7 @@ fallthrough = true
 [[d1_databases]]
 binding = "DB"
 database_name = "cfms-acme-db"
+migrations_dir = "drizzle"
 database_id = "37fed2ac-a473-4d61-9303-ae30991b2d53"
 
 [observability]

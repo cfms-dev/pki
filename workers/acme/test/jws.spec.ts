@@ -17,7 +17,6 @@ describe("JWS & Nonce Cryptography", () => {
 
   beforeEach(async () => {
     db = new Database(createMockD1Database());
-    await db.initSchema();
   });
 
   it("should generate and consume single-use nonces", async () => {

@@ -156,10 +156,7 @@ describe("IP ACME issuance and lifecycle", () => {
     expect(row!.not_after - row!.not_before).toBe(86400);
   });
 
-  it("migrates a legacy authorization table idempotently and reads legacy DNS metadata", async () => {
-    await context.d1.exec("ALTER TABLE authorizations DROP COLUMN identifier_type");
-    await context.database.initSchema();
-    await context.database.initSchema();
+  it("reads legacy DNS metadata with the current authorization schema", async () => {
     expect((await context.d1.prepare("PRAGMA table_info(authorizations)").all<{ name: string }>()).results.filter((item) => item.name === "identifier_type")).toHaveLength(1);
     expect(readIdentifiers('["EXAMPLE.COM"]')).toEqual([dns]);
   });

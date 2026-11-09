@@ -7,7 +7,6 @@ const now = 1_700_000_000;
 
 async function createFixture() {
   const database = new Database(createMockD1Database());
-  await database.initSchema();
 
   const order: OrderRow = {
     id: "order-1",
@@ -20,12 +19,13 @@ async function createFixture() {
     is_ari_renewal: 0,
     created_at: now,
     expires_at: now + 3600,
-    certificate_id: null,
+    certificate_id: null, processing_started_at: null, finalize_generation: 0,
   };
   const authz: AuthorizationRow = {
     id: "authz-1",
     order_id: order.id,
     identifier_value: "example.com",
+    identifier_type: "dns",
     status: "pending",
     token: "a".repeat(22),
     expires_at: now + 3600,

@@ -63,7 +63,7 @@ describe("pre-D1 ingress admission", () => {
 
 describe("expired nonce lifecycle", () => {
   let d1: D1Database; let db: Database;
-  beforeEach(async () => { d1 = createMockD1Database(); db = new Database(d1); await db.initSchema(); });
+  beforeEach(async () => { d1 = createMockD1Database(); db = new Database(d1); });
 
   it("bounds each pass, reports backlog, and never removes live nonces", async () => {
     const now = Math.floor(Date.now() / 1000);

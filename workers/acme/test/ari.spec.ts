@@ -46,6 +46,7 @@ describe("RFC 9773 ACME Renewal Information (ARI)", () => {
     const notAfterSec = nowSec + 90 * 86400; // 90 days validity
 
     const mockCert: CertificateRow = {
+      ca_id: null,
       id: "cert-1",
       cert_id: "test-aki.test-serial",
       serial_number: "01020304",
@@ -77,6 +78,7 @@ describe("RFC 9773 ACME Renewal Information (ARI)", () => {
   it("should shift suggested window into the past for revoked certificates", () => {
     const nowSec = 1700000000;
     const mockCert: CertificateRow = {
+      ca_id: null,
       id: "cert-revoked",
       cert_id: "test-aki.test-serial",
       serial_number: "01020304",
@@ -107,6 +109,7 @@ describe("RFC 9773 ACME Renewal Information (ARI)", () => {
     const notAfterSec = notBeforeSec + 90 * 86400;
 
     const cert: CertificateRow = {
+      ca_id: null,
       id: "cert-orig",
       cert_id: "aki.serial",
       serial_number: "112233",
@@ -149,11 +152,11 @@ describe("RFC 9773 ACME Renewal Information (ARI)", () => {
   it("should configure ARI explanationURL only from CONFIG", async () => {
     const d1 = createMockD1Database();
     const db = new Database(d1);
-    await db.initSchema();
 
     const notBeforeSec = Math.floor(Date.now() / 1000);
     const notAfterSec = notBeforeSec + 90 * 86400;
     const cert: CertificateRow = {
+      ca_id: null,
       id: "cert-test-ari-url",
       cert_id: "aki-ari-test.serial-ari-test",
       serial_number: "998877",

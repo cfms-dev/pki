@@ -11,7 +11,6 @@ describe("Account order and failed-validation rate limits", () => {
 
   beforeEach(async () => {
     db = new Database(createMockD1Database());
-    await db.initSchema();
     limiter = new RateLimiter(db);
   });
 

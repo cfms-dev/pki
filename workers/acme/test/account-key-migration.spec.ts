@@ -1,3 +1,4 @@
+import { isUniqueConstraintError } from "../src/db/errors";
 import { describe, it, expect, beforeEach } from "vitest";
 import { createMockD1Database } from "./mock-d1";
 import { Database } from "../src/db/queries";
@@ -35,16 +36,6 @@ async function createLegacyDatabase(
   accounts: LegacyAccountInput[]
 ): Promise<{ d1: D1Database; database: Database }> {
   const d1 = createMockD1Database();
-  await d1.exec(`
-    CREATE TABLE accounts (
-      id TEXT PRIMARY KEY,
-      jwk TEXT NOT NULL,
-      thumbprint TEXT UNIQUE NOT NULL,
-      contact TEXT,
-      status TEXT NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-  `);
   for (const account of accounts) {
     await d1
       .prepare(
@@ -63,7 +54,6 @@ async function createLegacyDatabase(
       .run();
   }
   const database = new Database(d1);
-  await database.initSchema();
   return { d1, database };
 }
 
@@ -85,7 +75,6 @@ describe("account public key fingerprint schema and migration", () => {
   it("creates the identity column, UNIQUE index, and conflict table on an empty database", async () => {
     const d1 = createMockD1Database();
     const database = new Database(d1);
-    await database.initSchema();
 
     expect(await tableColumns(d1, "accounts")).toContain(
       "public_key_fingerprint"
@@ -104,8 +93,7 @@ describe("account public key fingerprint schema and migration", () => {
     await migrateAccountPublicKeyFingerprints(database);
     await expect(ensureAccountPublicKeyIndex(database)).resolves.toBeUndefined();
 
-    // initSchema is idempotent with the new column, indexes, and table.
-    await database.initSchema();
+    // The data migration remains idempotent.
     expect(await tableColumns(d1, "accounts")).toContain(
       "public_key_fingerprint"
     );
@@ -113,7 +101,7 @@ describe("account public key fingerprint schema and migration", () => {
     await expect(ensureAccountPublicKeyIndex(database)).resolves.toBeUndefined();
   });
 
-  it("adds the column to a legacy database and backfills without changing account identity", async () => {
+  it("backfills legacy account data in the current schema without changing identity", async () => {
     const firstKeys = await generateAccountKeys("ES256");
     const firstJwk = await exportPublicJwk(firstKeys);
     const secondKeys = await generateAccountKeys("RS256");
@@ -145,7 +133,7 @@ describe("account public key fingerprint schema and migration", () => {
     );
     for (const input of legacyInputs) {
       const row = await database.getAccountById(input.id);
-      // ALTER TABLE ADD COLUMN must not be assumed to compute fingerprints.
+      // A nullable fingerprint is backfilled only by the explicit data migration.
       expect(row?.public_key_fingerprint ?? null).toBeNull();
     }
 
@@ -260,7 +248,7 @@ describe("account public key fingerprint schema and migration", () => {
         "b-newer-account",
         expectedFingerprint
       )
-    ).rejects.toThrow(/UNIQUE constraint failed/i);
+    ).rejects.toSatisfy(isUniqueConstraintError);
 
     // Simulate an administrator resolving the duplicate by removing the
     // duplicative account (production requires manual review, never automatic
@@ -365,7 +353,6 @@ describe("account public key fingerprint schema and migration", () => {
   it("fails closed when the named index is not a UNIQUE index on the fingerprint column", async () => {
     const d1 = createMockD1Database();
     const database = new Database(d1);
-    await database.initSchema();
 
     await d1.exec(`
       DROP INDEX idx_accounts_public_key_fingerprint;
@@ -380,7 +367,6 @@ describe("account public key fingerprint schema and migration", () => {
   it("enforces the UNIQUE fingerprint index for direct duplicate writes", async () => {
     const d1 = createMockD1Database();
     const database = new Database(d1);
-    await database.initSchema();
 
     const firstKeys = await generateAccountKeys("ES256");
     const secondKeys = await generateAccountKeys("ES256");
@@ -412,7 +398,7 @@ describe("account public key fingerprint schema and migration", () => {
         .prepare("UPDATE accounts SET public_key_fingerprint = ? WHERE id = ?")
         .bind(fingerprint, "second")
         .run()
-    ).rejects.toThrow(/UNIQUE constraint failed/i);
+    ).rejects.toSatisfy(isUniqueConstraintError);
 
     await expect(
       database.saveAccount({
@@ -424,6 +410,6 @@ describe("account public key fingerprint schema and migration", () => {
         status: "valid",
         created_at: NOW,
       })
-    ).rejects.toThrow(/UNIQUE constraint failed/i);
+    ).rejects.toSatisfy(isUniqueConstraintError);
   });
 });
