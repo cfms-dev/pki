@@ -178,6 +178,73 @@ describe("X.509 Certificate Issuance & CSR Handling", () => {
     });
   });
 
+  describe.each(["utf8String", "printableString"] as const)("%s issuer names", (encoding) => {
+    it.each([
+      { type: "dns" as const, value: "issuer.example.com" },
+      { type: "ip" as const, value: "93.184.216.34" },
+    ])("preserves issuer DER when issuing a $type certificate", async (identifier) => {
+      const attribute = (value: string): x509.JsonAttributeObject =>
+        encoding === "utf8String" ? { utf8String: value } : { printableString: value };
+      // ASCII values would become PrintableString if the name went through text.
+      const name = new x509.Name([
+        { C: [{ printableString: "CN" }] },
+        { ST: [attribute("Beijing")] },
+        { L: [attribute("Beijing")] },
+        { O: [attribute("CFMS")] },
+        { CN: [attribute("CFMS Test Intermediate CA")] },
+      ]);
+      const caKeys = await crypto.subtle.generateKey(
+        { name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]
+      ) as CryptoKeyPair;
+      const ca = await x509.X509CertificateGenerator.createSelfSigned({
+        name,
+        keys: caKeys,
+        notBefore: new Date(Date.now() - 10000),
+        notAfter: new Date(Date.now() + 365 * 86400000),
+        signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+        extensions: [
+          new x509.BasicConstraintsExtension(true, 0, true),
+          await x509.SubjectKeyIdentifierExtension.create(caKeys.publicKey),
+        ],
+      });
+      const subjectDer = new Uint8Array(ca.subjectName.toArrayBuffer());
+      const roundtripDer = new Uint8Array(new x509.Name(ca.subject).toArrayBuffer());
+      expect(Buffer.from(roundtripDer).equals(Buffer.from(subjectDer))).toBe(encoding === "printableString");
+
+      const caPem = ca.toString("pem");
+      mockCaCertificate(caPem);
+      const keyDer = await crypto.subtle.exportKey("pkcs8", caKeys.privateKey) as ArrayBuffer;
+      const env: AcmeEnv = {
+        ...testRateLimits, ASSETS: testAssets,
+        DB: createMockD1Database(),
+        PK_GENERIC_INTERMEDIATE: `-----BEGIN PRIVATE KEY-----\n${Buffer.from(keyDer).toString("base64")}\n-----END PRIVATE KEY-----`,
+      };
+      const clientKeys = await crypto.subtle.generateKey(
+        { name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]
+      ) as CryptoKeyPair;
+      const csr = await x509.Pkcs10CertificateRequestGenerator.create({
+        name: "",
+        keys: clientKeys,
+        signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+        extensions: [new x509.SubjectAlternativeNameExtension([identifier])],
+      });
+
+      const issued = await issueCertificateFromCsr(csr, [identifier], env, 90);
+      const leaf = new x509.X509Certificate(issued.leafPem);
+      expect(new Uint8Array(leaf.issuerName.toArrayBuffer())).toEqual(subjectDer);
+      expect(await leaf.verify({ publicKey: ca.publicKey, signatureOnly: true })).toBe(true);
+      expect(issued.chainPem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g))
+        .toEqual([issued.leafPem, caPem]);
+      const san = leaf.getExtension(x509.SubjectAlternativeNameExtension)!;
+      expect(san.names.items.map(({ type, value }) => ({ type, value }))).toEqual([identifier]);
+      expect(san.critical).toBe(identifier.type === "ip");
+      expect(leaf.subject).toBe(identifier.type === "ip" ? "" : `CN=${identifier.value}`);
+      expect(issued.notAfter - issued.notBefore).toBe(
+        identifier.type === "ip" ? CONFIG.IP_CERT_VALIDITY_HOURS * 3600 : 90 * 86400
+      );
+    });
+  });
+
   it("should issue a 90-day leaf certificate signed by intermediate CA", async () => {
     // 1. Generate an Intermediate CA key pair for testing
     const caKeys = (await crypto.subtle.generateKey(

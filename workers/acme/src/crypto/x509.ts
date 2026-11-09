@@ -219,7 +219,8 @@ export async function issueCertificateFromCsr(
   const leafCert = await x509.X509CertificateGenerator.create({
     serialNumber: serialHex,
     subject,
-    issuer: caCert.subject,
+    // Preserve ASN.1 name encoding so issuer DER matches the CA subject exactly.
+    issuer: caCert.subjectName,
     notBefore,
     notAfter,
     publicKey: csr.publicKey,

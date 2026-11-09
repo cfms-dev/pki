@@ -20,11 +20,21 @@ try {
   execFileSync(process.execPath, ["node_modules/wrangler/bin/wrangler.js", "deploy", "--dry-run", "--outdir", directory], { stdio: "pipe", timeout: 60000 });
   const caKeys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
   const ca = await x509.X509CertificateGenerator.createSelfSigned({
-    serialNumber: "1234", name: "CN=Runtime Smoke CA", keys: caKeys,
+    serialNumber: "1234",
+    // ASCII UTF8String values expose any lossy string round-trip during issuance.
+    name: new x509.Name([
+      { C: [{ printableString: "CN" }] },
+      { ST: [{ utf8String: "Beijing" }] },
+      { L: [{ utf8String: "Beijing" }] },
+      { O: [{ utf8String: "CFMS" }] },
+      { CN: [{ utf8String: "Runtime Smoke CA" }] },
+    ]),
+    keys: caKeys,
     notBefore: new Date(Date.now() - 10000), notAfter: new Date(Date.now() + 365 * 86400000),
     signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
     extensions: [new x509.BasicConstraintsExtension(true, 0, true), await x509.SubjectKeyIdentifierExtension.create(caKeys.publicKey)],
   });
+  const issuerDer = new Uint8Array(ca.subjectName.toArrayBuffer());
   await writeFile(path.join(directory, "generic-intermediate.pem"), ca.toString("pem"));
   await writeFile(path.join(directory, "manifest.json"), JSON.stringify({
     cas: {
@@ -181,6 +191,7 @@ try {
   const downloaded = await runtime.dispatchFetch(body.certificate);
   const chain = await downloaded.text();
   const leaf = new x509.X509Certificate(chain.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)[0]);
+  assert.deepEqual(new Uint8Array(leaf.issuerName.toArrayBuffer()), issuerDer);
   assert.equal(await leaf.verify({ publicKey: ca.publicKey, signatureOnly: true }), true);
   assert.equal(leaf.getExtension(x509.CRLDistributionPointsExtension)
     ?.distributionPoints[0].distributionPoint?.fullName?.[0].uniformResourceIdentifier,
@@ -219,6 +230,7 @@ try {
     const issued = await finalized.json();
     const downloaded = await runtime.dispatchFetch(issued.certificate);
     const leaf = new x509.X509Certificate((await downloaded.text()).match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)[0]);
+    assert.deepEqual(new Uint8Array(leaf.issuerName.toArrayBuffer()), issuerDer);
     assert.equal(leaf.notAfter.getTime() - leaf.notBefore.getTime(), 160 * 3600000);
     assert.deepEqual(leaf.getExtension(x509.SubjectAlternativeNameExtension).names.items.map((item) => item.type), identifiers.map((item) => item.type));
     assert.equal(await leaf.verify({ publicKey: ca.publicKey, signatureOnly: true }), true);
