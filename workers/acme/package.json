@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": "^26.13.0"
   },
   "scripts": {
     "build:cas": "node scripts/bundle-cas.mjs",
@@ -17,7 +17,8 @@
     "test": "vitest run",
     "dev": "wrangler dev --types",
     "deploy": "wrangler deploy",
-    "migrate:account-keys": "node scripts/migrate-account-keys.mjs"
+    "migrate:account-keys": "node scripts/migrate-account-keys.mjs",
+    "test:runtime": "node scripts/runtime-smoke.mjs"
   },
   "dependencies": {
     "@peculiar/x509": "^3.1.0",
@@ -27,7 +28,12 @@
     "@types/node": "^26.6.6",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0",
-    "wrangler": "^4.157.0",
+    "wrangler": "^4.158.0",
     "esbuild": "^0.28.2"
+  },
+  "packageManager": "npm@12.2.2",
+  "allowScripts": {
+    "esbuild": true,
+    "workerd": true
   }
 }
