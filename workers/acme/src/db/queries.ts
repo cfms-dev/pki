@@ -1,4 +1,6 @@
-import { AcmeIdentifier, asIdentifiers } from "../acme/identifiers";
+import { AcmeIdentifier, asIdentifiers, readIdentifiers } from "../acme/identifiers";
+import { AcmeError } from "../errors";
+import { IssuanceBucket, issuanceBuckets } from "../ratelimit/issuance";
 import {
   AccountRow,
   AuthorizationRow,
@@ -116,6 +118,17 @@ export class Database {
             window_start INTEGER NOT NULL
         );
       `),
+      this.db.prepare(`CREATE TABLE IF NOT EXISTS issuance_ledger (
+        certificate_id TEXT NOT NULL, bucket_key TEXT NOT NULL, issued_at INTEGER NOT NULL,
+        PRIMARY KEY (certificate_id, bucket_key)
+      );`),
+      this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_issuance_ledger_bucket_time ON issuance_ledger (bucket_key, issued_at);`),
+      this.db.prepare(`CREATE TABLE IF NOT EXISTS security_migrations (name TEXT PRIMARY KEY, completed_at INTEGER NOT NULL);`),
+      // Only genuinely empty databases initialize automatically. Restores of
+      // nonempty databases must preserve their ledger and readiness marker.
+      this.db.prepare(`INSERT OR IGNORE INTO security_migrations (name, completed_at)
+        SELECT 'issuance-ledger-v1', unixepoch() WHERE NOT EXISTS (SELECT 1 FROM certificates);`),
+      this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_nonces_expiry ON nonces (expires_at);`),
       this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_orders_account ON orders (account_id);`),
       this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_authorizations_order ON authorizations (order_id);`),
       this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_challenges_authorization ON challenges (authorization_id);`),
@@ -272,6 +285,46 @@ export class Database {
       .bind(nonce, now)
       .run();
     return (res.meta?.changes ?? 0) > 0;
+  }
+
+  /** Bounded, index-backed cleanup; safe to repeat or run alongside consumption. */
+  async cleanupExpiredNonces(now = Math.floor(Date.now() / 1000), maxBatches = 100): Promise<{ deleted: number; backlog: boolean }> {
+    if (!Number.isSafeInteger(maxBatches) || maxBatches < 1 || maxBatches > 100) throw new Error("Invalid cleanup batch count");
+    let deleted = 0;
+    for (let batch = 0; batch < maxBatches; batch++) {
+      const result = await this.db.prepare(`DELETE FROM nonces WHERE nonce IN
+        (SELECT nonce FROM nonces WHERE expires_at <= ? ORDER BY expires_at LIMIT 1000)`)
+        .bind(now).run();
+      const count = result.meta?.changes ?? 0;
+      deleted += count;
+      if (count < 1000) return { deleted, backlog: false };
+    }
+    const backlog = await this.db.prepare("SELECT 1 FROM nonces WHERE expires_at <= ? LIMIT 1").bind(now).first();
+    return { deleted, backlog: backlog !== null };
+  }
+
+  async ensureIssuanceLedgerReady(): Promise<void> {
+    const ready = await this.db.prepare("SELECT 1 FROM security_migrations WHERE name = 'issuance-ledger-v1'").first();
+    if (!ready) throw new AcmeError("serverInternal", "Issuance accounting is not initialized", 503,
+      undefined, undefined, { "Retry-After": "60" });
+  }
+
+  async assertIssuanceCapacity(buckets: IssuanceBucket[], now: number): Promise<void> {
+    const exceeded = await this.db.prepare(`SELECT json_extract(b.value, '$.key') AS key,
+        json_extract(b.value, '$.limit') AS cap, json_extract(b.value, '$.windowSeconds') AS window_seconds
+      FROM json_each(?) b WHERE (SELECT COUNT(*) FROM issuance_ledger l
+        WHERE l.bucket_key = json_extract(b.value, '$.key') AND l.issued_at > ? - json_extract(b.value, '$.windowSeconds'))
+        >= json_extract(b.value, '$.limit') LIMIT 1`)
+      .bind(JSON.stringify(buckets), now).first<{ key: string; cap: number; window_seconds: number }>();
+    if (!exceeded) return;
+    // The cap-th newest entry must expire to admit another issuance, including
+    // when a historical backfill legitimately contains more than today's cap.
+    const row = await this.db.prepare(`SELECT issued_at FROM issuance_ledger WHERE bucket_key = ? AND issued_at > ?
+      ORDER BY issued_at DESC LIMIT 1 OFFSET ?`)
+      .bind(exceeded.key, now - exceeded.window_seconds, exceeded.cap - 1).first<{ issued_at: number }>();
+    const retry = Math.max(1, (row?.issued_at ?? now) + exceeded.window_seconds - now);
+    throw new AcmeError("rateLimited", `Certificate issuance rate limit exceeded for '${exceeded.key}'`, 429,
+      undefined, undefined, { "Retry-After": String(retry) });
   }
 
   // --- Account Operations ---
@@ -874,8 +927,11 @@ export class Database {
       .bind(orderId, generation).run();
   }
 
-  /** All three writes share D1's batch transaction and the INSERT's fenced guard. */
+  /** Certificate, quota ledger, replacement and order commit in one D1 transaction. */
   async completeOrder(orderId: string, generation: number, cert: CertificateRow, predecessor: string | null, now: number): Promise<boolean> {
+    await this.ensureIssuanceLedgerReady();
+    const buckets = predecessor ? [] : issuanceBuckets(readIdentifiers(cert.san));
+    const bucketsJson = JSON.stringify(buckets);
     const results = await this.db.batch([
       this.db.prepare(
         `INSERT INTO certificates (id, cert_id, serial_number, aki, subject, san, pem, not_before, not_after,
@@ -883,13 +939,23 @@ export class Database {
          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?
          WHERE EXISTS (SELECT 1 FROM orders o JOIN accounts a ON a.id = o.account_id
            WHERE o.id = ? AND o.status = 'processing' AND o.finalize_generation = ?
-           AND o.processing_started_at > ? AND o.expires_at > ? AND a.status = 'valid')
+           AND o.processing_started_at > ? AND o.expires_at > ? AND a.status = 'valid'
+           AND ((o.is_ari_renewal = 0 AND ? IS NULL) OR (o.is_ari_renewal = 1 AND o.replaces_cert_id = ?)))
+         AND EXISTS (SELECT 1 FROM security_migrations WHERE name = 'issuance-ledger-v1')
          AND EXISTS (SELECT 1 FROM authorizations WHERE order_id = ?)
          AND NOT EXISTS (SELECT 1 FROM authorizations WHERE order_id = ? AND (status != 'valid' OR expires_at <= ?))
-         AND (? IS NULL OR EXISTS (SELECT 1 FROM certificates WHERE cert_id = ? AND replaced_by_cert_id IS NULL))`
+         AND (? IS NULL OR EXISTS (SELECT 1 FROM certificates WHERE cert_id = ? AND replaced_by_cert_id IS NULL))
+         AND NOT EXISTS (SELECT 1 FROM json_each(?) b WHERE
+           (SELECT COUNT(*) FROM issuance_ledger l WHERE l.bucket_key = json_extract(b.value, '$.key')
+             AND l.issued_at > ? - json_extract(b.value, '$.windowSeconds')) >= json_extract(b.value, '$.limit'))`
       ).bind(cert.id, cert.cert_id, cert.serial_number, cert.aki, cert.subject, cert.san, cert.pem,
         cert.not_before, cert.not_after, cert.account_id, cert.created_at, cert.ca_id ?? null,
-        orderId, generation, now - 60, now, orderId, orderId, now, predecessor, predecessor),
+        orderId, generation, now - 60, now, predecessor, predecessor, orderId, orderId, now, predecessor, predecessor, bucketsJson, now),
+      this.db.prepare(`INSERT INTO issuance_ledger (certificate_id, bucket_key, issued_at)
+        SELECT ?, json_extract(value, '$.key'), ? FROM json_each(?)
+        WHERE EXISTS (SELECT 1 FROM certificates c JOIN orders o ON o.id = ?
+          WHERE c.id = ? AND o.status = 'processing' AND o.finalize_generation = ? AND o.certificate_id IS NULL)`)
+        .bind(cert.id, now, bucketsJson, orderId, cert.id, generation),
       this.db.prepare(
         `UPDATE certificates SET replaced_by_cert_id = ? WHERE cert_id = ? AND replaced_by_cert_id IS NULL
          AND EXISTS (SELECT 1 FROM certificates WHERE id = ?)`
@@ -900,7 +966,9 @@ export class Database {
          AND EXISTS (SELECT 1 FROM certificates WHERE id = ?)`
       ).bind(cert.id, orderId, generation, cert.id),
     ]);
-    return (results[0].meta?.changes ?? 0) === 1 && (results[2].meta?.changes ?? 0) === 1;
+    const completed = (results[0].meta?.changes ?? 0) === 1 && (results[3].meta?.changes ?? 0) === 1;
+    if (!completed) await this.assertIssuanceCapacity(buckets, now);
+    return completed;
   }
 
   /** Returns the challenge types that successfully validated each order identifier. */

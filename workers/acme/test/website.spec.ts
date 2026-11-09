@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { AcmeEnv } from "../src/config";
 import worker from "../src/index";
 import { testContext } from "./acme-test-helpers";
-import { testAssets } from "./website-test-helpers";
+import { testAssets, testRateLimits } from "./website-test-helpers";
 
 const env: AcmeEnv = {
-  ASSETS: testAssets,
+  ...testRateLimits, ASSETS: testAssets,
   get DB(): D1Database { throw new Error("Website accessed D1"); },
 };
 

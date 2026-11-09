@@ -1,43 +1,18 @@
 import { AcmeIdentifier, asIdentifiers, identifierKey } from "../acme/identifiers";
-import { parseIpv6 } from "../acme/ip";
 import { CONFIG } from "../config";
-import { Database } from "../db/queries";
+import type { Database } from "../db/queries";
 import { AcmeError } from "../errors";
 
-/**
- * Extracts effective registered domain (eTLD+1 simplified)
- */
-export function getRegisteredDomain(domain: string): string {
-  const clean = domain.startsWith("*.") ? domain.slice(2) : domain;
-  const parts = clean.toLowerCase().split(".").filter(Boolean);
-  if (parts.length <= 2) {
-    return clean.toLowerCase();
-  }
-  // Handles common 2-level TLDs like .co.uk, .com.cn
-  const secondLast = parts[parts.length - 2];
-  if (
-    ["com", "co", "net", "org", "gov", "edu"].includes(secondLast) &&
-    parts[parts.length - 1].length === 2
-  ) {
-    return parts.slice(-3).join(".");
-  }
-  return parts.slice(-2).join(".");
-}
+export { getRegisteredDomain, issuanceGroup } from "./issuance";
 
 export class RateLimiter {
   constructor(private db: Database) {}
 
-  /**
-   * Checks rate limits for creating a new order.
-   * If isAriRenewal is true, duplicate certificate and registered domain limits are EXEMPT!
-   */
+  /** Unverified orders consume only their own account's request budget. */
   async checkNewOrderLimits(
     accountId: string,
-    domains: (string | AcmeIdentifier)[],
-    isAriRenewal: boolean,
     now = Math.floor(Date.now() / 1000)
   ): Promise<void> {
-    // 1. Account new orders limit (anti-abuse)
     const accountOrderKey = `orders:account:${accountId}`;
     const accountCheck = await this.db.checkAndIncrementRateLimit(
       accountOrderKey,
@@ -48,44 +23,6 @@ export class RateLimiter {
     if (!accountCheck.allowed) {
       throw AcmeError.rateLimited(
         `Too many new orders for account ${accountId}. Limit is ${CONFIG.RATE_LIMIT_NEW_ORDERS_PER_ACCOUNT} per 3 hours.`
-      );
-    }
-
-    // 2. If ARI renewal is approved, EXEMPT from issuance rate limits!
-    if (isAriRenewal) {
-      return;
-    }
-
-    // 3. Registered Domain Limit
-    const registeredDomains = new Set(asIdentifiers(domains).map(issuanceGroup));
-    for (const regDomain of registeredDomains) {
-      const domainKey = regDomain.startsWith("ip:") ? `issuance:${regDomain}` : `issuance:domain:${regDomain}`;
-      const domainCheck = await this.db.checkAndIncrementRateLimit(
-        domainKey,
-        CONFIG.RATE_LIMIT_CERTS_PER_DOMAIN,
-        CONFIG.RATE_LIMIT_DOMAIN_WINDOW_SECONDS,
-        now
-      );
-      if (!domainCheck.allowed) {
-        throw AcmeError.rateLimited(
-          `Rate limit exceeded for registered domain '${regDomain}'. Limit is ${CONFIG.RATE_LIMIT_CERTS_PER_DOMAIN} per 7 days.`
-        );
-      }
-    }
-
-    // 4. Duplicate Certificate Limit
-    const identifiers = asIdentifiers(domains);
-    const sortedDomains = identifiers.map((item) => item.type === "dns" ? item.value : identifierKey(item)).sort().join(",");
-    const duplicateKey = `issuance:duplicate:${sortedDomains}`;
-    const duplicateCheck = await this.db.checkAndIncrementRateLimit(
-      duplicateKey,
-      CONFIG.RATE_LIMIT_DUPLICATE_CERTS,
-      CONFIG.RATE_LIMIT_DUPLICATE_WINDOW_SECONDS,
-      now
-    );
-    if (!duplicateCheck.allowed) {
-      throw AcmeError.rateLimited(
-        `Duplicate certificate limit exceeded for [${sortedDomains}]. Limit is ${CONFIG.RATE_LIMIT_DUPLICATE_CERTS} duplicates per 7 days.`
       );
     }
   }
@@ -131,13 +68,4 @@ export class RateLimiter {
     const key = identifier.type === "dns" ? identifier.value : identifierKey(identifier);
     return `failed:authz:${accountId}:${key}`;
   }
-}
-
-
-export function issuanceGroup(identifier: AcmeIdentifier): string {
-  if (identifier.type === "dns") return getRegisteredDomain(identifier.value);
-  if (!identifier.value.includes(":")) return `ip:v4:${identifier.value}`;
-  const bytes = parseIpv6(identifier.value);
-  if (!bytes) throw new Error("Invalid IPv6 rate-limit identifier");
-  return `ip:v6:${Array.from(bytes.slice(0, 8), (byte) => byte.toString(16).padStart(2, "0")).join("")}/64`;
 }

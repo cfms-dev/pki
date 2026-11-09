@@ -1,4 +1,4 @@
-import { testAssets } from "./website-test-helpers";
+import { testAssets, testRateLimits } from "./website-test-helpers";
 import { mockCaCertificate } from "./ca-test-helpers";
 import { migrateAccountPublicKeyFingerprints } from "../src/db/account-keys";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -32,7 +32,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
     });
 
     it("should publish CONFIG.CAA_ISSUER_DOMAIN_NAME in ACME Directory meta.caaIdentities", async () => {
-      const mockEnv: AcmeEnv = { ASSETS: testAssets, DB: createMockD1Database() };
+      const mockEnv: AcmeEnv = { ...testRateLimits, ASSETS: testAssets, DB: createMockD1Database() };
       const resp = handleDirectory(
         new Request("https://acme.test/directory"),
         mockEnv,
@@ -54,7 +54,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
       CONFIG.WEBSITE_URL = "https://custom.example.org";
       CONFIG.TERMS_OF_SERVICE_URL = "https://custom.example.org/tos";
       const customEnv: AcmeEnv = {
-        ASSETS: testAssets,
+        ...testRateLimits, ASSETS: testAssets,
         DB: createMockD1Database(),
       };
       const resp = handleDirectory(
@@ -80,7 +80,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
     it("publishes the configured CAA issuer in directory metadata", async () => {
       CONFIG.CAA_ISSUER_DOMAIN_NAME = "custom-caa.example.com";
       const customEnv: AcmeEnv = {
-        ASSETS: testAssets,
+        ...testRateLimits, ASSETS: testAssets,
         DB: createMockD1Database(),
       };
       const resp = handleDirectory(
@@ -99,7 +99,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
     it("validates orders against the configured CAA issuer", async () => {
       CONFIG.CAA_ISSUER_DOMAIN_NAME = "custom-caa.example.com";
       const customEnv: AcmeEnv = {
-        ASSETS: testAssets,
+        ...testRateLimits, ASSETS: testAssets,
         DB: createMockD1Database(),
       };
 
@@ -120,7 +120,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
 
       // Switching the code configuration changes CAA validation.
       CONFIG.CAA_ISSUER_DOMAIN_NAME = "cfms-pki.crpteam.club";
-      const defaultEnv: AcmeEnv = { ASSETS: testAssets, DB: createMockD1Database() };
+      const defaultEnv: AcmeEnv = { ...testRateLimits, ASSETS: testAssets, DB: createMockD1Database() };
       await expect(
         validateCaaForOrder(["example.org"], "https://acme.test/account/1", defaultEnv, mockFetch)
       ).rejects.toThrow("CAA issue record forbids issuance for domain by 'cfms-pki.crpteam.club'");
@@ -838,7 +838,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
 
       mockCaCertificate(caCertPem);
       const mockEnv: AcmeEnv = {
-        ASSETS: testAssets,
+        ...testRateLimits, ASSETS: testAssets,
         DB: d1,
         PK_GENERIC_INTERMEDIATE: caPkPem,
         fetch: mockFetch,
@@ -943,7 +943,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
 
       mockCaCertificate(caCertPem);
       const mockEnv: AcmeEnv = {
-        ASSETS: testAssets,
+        ...testRateLimits, ASSETS: testAssets,
         DB: d1,
         PK_GENERIC_INTERMEDIATE: caPkPem,
         fetch: mockFetch,

@@ -2,21 +2,29 @@ import { DatabaseSync } from "node:sqlite";
 
 export function createMockD1Database(): D1Database {
   const db = new DatabaseSync(":memory:");
+  let pendingBatch: Promise<unknown> = Promise.resolve();
 
   return {
     prepare(query: string): D1PreparedStatement {
       return createPreparedStatement(db, query, []);
     },
     async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
-      const results: D1Result<T>[] = [];
-      db.exec("BEGIN");
-      try {
-        for (const stmt of statements) {
-          results.push(await (stmt as unknown as { run(): Promise<D1Result<T>> }).run());
-        }
-        db.exec("COMMIT");
-      } catch (error) { db.exec("ROLLBACK"); throw error; }
-      return results;
+      // D1 serializes transactions. Preserve that property when concurrent
+      // finalize requests share this in-memory SQLite connection.
+      const execute = async () => {
+        const results: D1Result<T>[] = [];
+        db.exec("BEGIN");
+        try {
+          for (const stmt of statements) {
+            results.push(await (stmt as unknown as { run(): Promise<D1Result<T>> }).run());
+          }
+          db.exec("COMMIT");
+        } catch (error) { db.exec("ROLLBACK"); throw error; }
+        return results;
+      };
+      const result = pendingBatch.then(execute);
+      pendingBatch = result.catch(() => {});
+      return result;
     },
     async exec(query: string): Promise<D1ExecResult> {
       db.exec(query);

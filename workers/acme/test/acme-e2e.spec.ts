@@ -1,4 +1,4 @@
-import { testAssets } from "./website-test-helpers";
+import { testAssets, testRateLimits } from "./website-test-helpers";
 import { mockCaCertificate } from "./ca-test-helpers";
 import { describe, it, expect, beforeEach } from "vitest";
 import * as x509 from "@peculiar/x509";
@@ -45,7 +45,7 @@ describe("ACME RFC 8555 & RFC 9773 ARI End-to-End Suite", () => {
 
     mockCaCertificate(caCertPem);
     env = {
-      ASSETS: testAssets,
+      ...testRateLimits, ASSETS: testAssets,
       DB: createMockD1Database(),
       PK_GENERIC_INTERMEDIATE: caKeyPem,
       fetch: async (input: RequestInfo | URL) => {

@@ -14,6 +14,7 @@ import { AccountRow, AuthorizationRow, OrderRow } from "../db/types";
 import { AcmeError } from "../errors";
 import { checkAriRenewalEligibility } from "../ari/window";
 import { RateLimiter } from "../ratelimit/limiter";
+import { issuanceBuckets } from "../ratelimit/issuance";
 import { buildChallengesForAuthorization } from "../acme/challenges";
 import { AcmeIdentifier, identifierKey, readIdentifiers, validateDnsIdentifier, validateIpIdentifier } from "../acme/identifiers";
 import { syncOrderState } from "../acme/state";
@@ -99,9 +100,10 @@ export async function handleNewOrder(
     replacesCertId = payload.replaces;
   }
 
-  // Check Rate Limits (exempts duplicate & domain caps if isAriRenewal == true)
+  await database.ensureIssuanceLedgerReady();
+  // Unverified orders must never consume another account's issuance budget.
   const rateLimiter = new RateLimiter(database);
-  await rateLimiter.checkNewOrderLimits(verified.account.id, identifiers, isAriRenewal);
+  await rateLimiter.checkNewOrderLimits(verified.account.id);
 
   const orderId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
@@ -203,6 +205,8 @@ export async function handleFinalizeOrder(
   if (!verified.account) {
     throw AcmeError.unauthorized();
   }
+
+  await database.ensureIssuanceLedgerReady();
 
   let order = await database.getOrderById(orderId);
   if (!order) {
@@ -337,6 +341,10 @@ export async function handleFinalizeOrder(
       undefined,
       methodsByDomain
     );
+
+    // Advisory pre-check avoids unnecessary signing. The authoritative check
+    // and ledger write are repeated atomically by completeOrder below.
+    await database.assertIssuanceCapacity(order.is_ari_renewal ? [] : issuanceBuckets(orderIdentifiers), Math.floor(Date.now() / 1000));
 
     // After CAA validation and other pre-issuance checks pass,
     // select an Intermediate CA from the eligible pool

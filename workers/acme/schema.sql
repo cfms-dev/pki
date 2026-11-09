@@ -106,3 +106,16 @@ CREATE INDEX IF NOT EXISTS idx_authorizations_order ON authorizations (order_id)
 CREATE INDEX IF NOT EXISTS idx_challenges_authorization ON challenges (authorization_id);
 CREATE INDEX IF NOT EXISTS idx_certificates_cert_id ON certificates (cert_id);
 CREATE INDEX IF NOT EXISTS idx_certificates_serial ON certificates (serial_number);
+
+-- Successful-issuance accounting; old order counters are not migrated.
+CREATE TABLE IF NOT EXISTS issuance_ledger (
+    certificate_id TEXT NOT NULL,
+    bucket_key TEXT NOT NULL,
+    issued_at INTEGER NOT NULL,
+    PRIMARY KEY (certificate_id, bucket_key)
+);
+CREATE INDEX IF NOT EXISTS idx_issuance_ledger_bucket_time ON issuance_ledger (bucket_key, issued_at);
+CREATE TABLE IF NOT EXISTS security_migrations (name TEXT PRIMARY KEY, completed_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_nonces_expiry ON nonces (expires_at);
+INSERT OR IGNORE INTO security_migrations (name, completed_at)
+    SELECT 'issuance-ledger-v1', unixepoch() WHERE NOT EXISTS (SELECT 1 FROM certificates);

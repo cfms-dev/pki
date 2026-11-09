@@ -118,6 +118,12 @@ require fresh validation. No ACME Profiles extension is advertised or required.
 
 ### Redirect and target policy
 
+`global_fetch_strictly_public` keeps hostname validation requests on the public
+Internet routing path, including Worker-hosted names in this service's own zone.
+This avoids private-origin routing that can bypass the target's Worker/security
+settings or produce a self-fetch 522. It does not pin DNS resolution or remove
+the DNS-rebinding limitation documented below.
+
 Each hop is checked before any request is made:
 
 - Initial request: `http:` on port 80 only.
@@ -560,6 +566,19 @@ generations and stale-claim fencing), and `test/schema-migration.spec.ts`
 
 ## Security operations
 
+Successful issuance quotas are enforced atomically with certificate persistence
+using `issuance_ledger`. Unverified orders consume only their own account's order
+budget. Shared quotas count only successful issuance in the previous seven days;
+historical order counters are not used. Revocation does not refund capacity.
+
+Native Workers bindings admit approximately 300 API requests/minute/source IP and
+ten account registration requests/minute/source IP before D1 access. Shared NATs
+share these budgets. Missing or failed bindings reject requests with HTTP 503;
+limit rejections return 429 and `Retry-After: 60`. Both bypass nonce generation.
+Static pages, directory reads and OPTIONS retain their database-free behavior.
+Expired nonces are cleaned every five minutes in bounded batches. Use
+`npm run cleanup:nonces` repeatedly to drain a reported backlog.
+
 Use Node.js 26.13.0 and npm 12.2.2. Run `npm ci`, `npm run typecheck`,
 `npm test`, `npm run test:runtime`, and `npm audit` before deployment.
 The runtime test uses Wrangler's exact bundled workerd/Miniflare version and
@@ -578,8 +597,11 @@ DNS TXT and CAA lookups have a 20-second budget, 10-second request limit,
 HTTP-01 keeps its existing target restrictions; DoH results cannot pin Workers'
 independent fetch DNS resolution and do not eliminate DNS rebinding risk.
 
-See [the security rollout runbook](../../docs/security-rollout.md) for D1
-backup, migration, Cloudflare credentials, verified revocation export and rollback.
+Back up D1 before operational changes. Preserve issuance-ledger data and its
+initialization marker when restoring or moving a database. Use a scoped D1 write
+token for management commands and a separate read-only token for verified CRL
+revocation export. Keep issuance paused if rolling back to a build without
+atomic issuance accounting.
 
 
 ### IP acceptance coverage

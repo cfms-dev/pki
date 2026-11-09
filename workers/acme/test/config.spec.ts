@@ -1,4 +1,4 @@
-import { testAssets } from "./website-test-helpers";
+import { testAssets, testRateLimits } from "./website-test-helpers";
 import { describe, expect, it } from "vitest";
 import { AcmeEnv, CONFIG } from "../src/config";
 import worker from "../src/index";
@@ -9,7 +9,7 @@ import { testContext } from "./acme-test-helpers";
 describe("Code-owned configuration", () => {
   it("uses the trimmed configured published URL when set", async () => {
     CONFIG.ACME_BASE_URL = "  https://published.example  ";
-    const env: AcmeEnv = { ASSETS: testAssets, DB: createMockD1Database() };
+    const env: AcmeEnv = { ...testRateLimits, ASSETS: testAssets, DB: createMockD1Database() };
     const response = await worker.fetch(new Request("https://request.example/directory"), env, testContext);
     expect(await response.json()).toMatchObject({ newAccount: "https://published.example/new-account" });
     expect(response.headers.get("Link")).toContain("https://published.example/directory");
@@ -17,7 +17,7 @@ describe("Code-owned configuration", () => {
 
   it("uses the same configured issuer in directory metadata and CAA enforcement", async () => {
     CONFIG.CAA_ISSUER_DOMAIN_NAME = "  configured.example  ";
-    const env: AcmeEnv = { ASSETS: testAssets, DB: createMockD1Database() };
+    const env: AcmeEnv = { ...testRateLimits, ASSETS: testAssets, DB: createMockD1Database() };
     const response = await worker.fetch(new Request("https://request.example/directory"), env, testContext);
     expect(await response.json()).toMatchObject({ meta: { caaIdentities: ["configured.example"] } });
     const query = (issuer: string) => async () => Response.json({
@@ -29,7 +29,7 @@ describe("Code-owned configuration", () => {
 
   it("publishes an explicit, trimmed CAA identity list", async () => {
     CONFIG.CAA_IDENTITIES = ["  ca-one.example  ", " ", "ca-two.example"];
-    const env: AcmeEnv = { ASSETS: testAssets, DB: createMockD1Database() };
+    const env: AcmeEnv = { ...testRateLimits, ASSETS: testAssets, DB: createMockD1Database() };
     const response = await worker.fetch(new Request("https://request.example/directory"), env, testContext);
     expect(await response.json()).toMatchObject({ meta: { caaIdentities: ["ca-one.example", "ca-two.example"] } });
   });

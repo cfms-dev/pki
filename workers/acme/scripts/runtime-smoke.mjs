@@ -35,6 +35,7 @@ try {
   assert.ok(entry, "Wrangler did not emit a Worker");
   const key = Buffer.from(await crypto.subtle.exportKey("pkcs8", caKeys.privateKey)).toString("base64");
   runtime = new Miniflare(convertV4MiniflareOptions({
+    unsafeTriggerHandlers: true,
     modulesRoot: directory,
     modules: [
       { type: "ESModule", path: path.join(directory, entry) },
@@ -42,13 +43,17 @@ try {
       { type: "Text", path: path.join(directory, "generic-intermediate.pem") },
       ...files.filter((file) => file.endsWith(".wasm")).map((file) => ({ type: "CompiledWasm", path: path.join(directory, file) })),
     ],
-    compatibilityDate: "2026-11-05", compatibilityFlags: ["nodejs_compat"],
+    compatibilityDate: "2026-11-05", compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
     assets: {
       directory: path.resolve("dist/website"), binding: "ASSETS",
       routerConfig: { has_user_worker: true },
       assetConfig: { html_handling: "auto-trailing-slash", not_found_handling: "none" },
     },
     d1Databases: ["DB"],
+    ratelimits: {
+      API_RATE_LIMITER: { namespace_id: "19472001", simple: { limit: 300, period: 60 } },
+      ACCOUNT_REGISTRATION_LIMITER: { namespace_id: "19472002", simple: { limit: 10, period: 60 } },
+    },
     bindings: { PK_GENERIC_INTERMEDIATE: `-----BEGIN PRIVATE KEY-----\n${key}\n-----END PRIVATE KEY-----` },
     outboundService: async (request) => {
       assert.ok(request.url.includes("type=CAA"), "Unexpected external runtime request");
@@ -184,6 +189,10 @@ try {
   assert.equal(Date.parse(renewalBody.suggestedWindow.end) - Date.parse(renewalBody.suggestedWindow.start), 30 * 86400000);
   assert.equal(leaf.notAfter.getTime() - leaf.notBefore.getTime(), 90 * 86400000);
   assert.equal((await db.prepare("SELECT ca_id FROM certificates").first()).ca_id, "generic-intermediate");
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM issuance_ledger").first()).n, 2);
+  // Repeat finalize must neither issue again nor charge the ledger again.
+  assert.equal((await post(order.finalize, { csr: b64(csr.rawData) })).status, 200);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM issuance_ledger").first()).n, 2);
 
   for (const identifiers of [
     [{ type: "ip", value: "93.184.216.34" }],
@@ -214,6 +223,30 @@ try {
       assert.equal(leaf.getExtension(x509.SubjectAlternativeNameExtension).critical, true);
     }
   }
+
+  // Native workerd rate-limit bindings reject registration before D1 writes.
+  let limited;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const result = await runtime.dispatchFetch(`${base}/new-account`, {
+      method: "POST", headers: { "CF-Connecting-IP": "198.51.100.10" }, body: "invalid JWS",
+    });
+    if (result.status === 429) { limited = result; break; }
+    assert.equal(result.status, 415);
+  }
+  assert.ok(limited, "Native registration limiter did not reject the burst");
+  assert.equal(limited.headers.get("Retry-After"), "60");
+  assert.equal(limited.headers.get("Replay-Nonce"), null);
+  const nonceCount = (await db.prepare("SELECT COUNT(*) AS n FROM nonces").first()).n;
+  assert.equal((await runtime.dispatchFetch(`${base}/new-account`, {
+    method: "POST", headers: { "CF-Connecting-IP": "198.51.100.10" }, body: "invalid JWS",
+  })).status, 429);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM nonces").first()).n, nonceCount);
+
+  await db.prepare("INSERT INTO nonces (nonce, expires_at) VALUES (?, ?)").bind("expired-runtime-nonce", 1).run();
+  const scheduled = await runtime.dispatchFetch(`${base}/cdn-cgi/local/scheduled?cron=*/5%20*%20*%20*%20*&format=json`);
+  assert.equal(scheduled.status, 200, await scheduled.clone().text());
+  assert.equal(await db.prepare("SELECT nonce FROM nonces WHERE nonce = ?").bind("expired-runtime-nonce").first(), null);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM nonces").first()).n, nonceCount);
 
   // Exercise the real socket adapter and strict parser in workerd, injecting
   // only the TCP peer. No public probe host or production binding is involved.
@@ -257,7 +290,7 @@ try {
       { type: "ESModule", path: path.join(directory, "parser-probe.mjs"), contents: probe.outputFiles[0].text },
       { type: "CompiledWasm", path: path.join(directory, "llhttp.wasm"), contents: await readFile(path.join(directory, wasmFile)) },
     ],
-    compatibilityDate: "2026-11-05", compatibilityFlags: ["nodejs_compat"],
+    compatibilityDate: "2026-11-05", compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
   }));
   const checks = await (await parserRuntime.dispatchFetch("https://parser.runtime.test")).json();
   for (const check of checks) {
@@ -268,7 +301,7 @@ try {
     assert.ok(check.request.includes(`Host: ${authority}\r\n`));
     if (!check.expected) assert.equal(check.result.errorType, "incorrectResponse");
   }
-  console.log("Workers runtime smoke passed: Assets, legacy D1 migration, DNS/IPv4/IPv6/mixed issuance, signatures, validity, ARI, compiled llhttp WASM and socket parsing");
+  console.log("Workers runtime smoke passed: Assets, legacy D1 migration, DNS/IPv4/IPv6/mixed issuance, atomic issuance ledger, native ingress limits, scheduled nonce cleanup, signatures, validity, ARI, compiled llhttp WASM and socket parsing");
 } finally {
   if (parserRuntime) await parserRuntime.dispose();
   if (runtime) await runtime.dispose();

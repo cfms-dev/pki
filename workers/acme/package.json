@@ -18,6 +18,7 @@
     "test": "vitest run",
     "dev": "wrangler dev --types",
     "deploy": "wrangler deploy",
+    "cleanup:nonces": "node scripts/cleanup-nonces.mjs",
     "migrate:account-keys": "node scripts/migrate-account-keys.mjs",
     "test:runtime": "node scripts/runtime-smoke.mjs",
     "build:llhttp": "node scripts/build-llhttp.mjs"

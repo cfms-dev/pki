@@ -2,6 +2,8 @@
 export interface AcmeEnv {
   DB: D1Database;
   ASSETS: Fetcher;
+  API_RATE_LIMITER: RateLimit;
+  ACCOUNT_REGISTRATION_LIMITER: RateLimit;
   fetch?: typeof fetch;
   // Private-key binding names come from registry/ca.json via the bundled manifest.
   [binding: string]: unknown;

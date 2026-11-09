@@ -5,7 +5,7 @@ import { RateLimiter } from "../src/ratelimit/limiter";
 import { AcmeError } from "../src/errors";
 import { CONFIG } from "../src/config";
 
-describe("Rate Limiting & ARI Renewal Exemption", () => {
+describe("Account order and failed-validation rate limits", () => {
   let db: Database;
   let limiter: RateLimiter;
 
@@ -15,63 +15,14 @@ describe("Rate Limiting & ARI Renewal Exemption", () => {
     limiter = new RateLimiter(db);
   });
 
-  it("should enforce duplicate certificate rate limit (max 5) for regular orders", async () => {
-    const domains = ["example.com", "www.example.com"];
+  it("isolates unverified orders to their own account's budget", async () => {
     const now = 1700000000;
-
-    // Issue 5 allowed orders
-    for (let i = 0; i < 5; i++) {
-      await expect(
-        limiter.checkNewOrderLimits("acc-1", domains, false, now)
-      ).resolves.not.toThrow();
+    for (let i = 0; i < CONFIG.RATE_LIMIT_NEW_ORDERS_PER_ACCOUNT; i++) {
+      await limiter.checkNewOrderLimits("attacker", now);
     }
-
-    // 6th order should be blocked by duplicate rate limit
-    await expect(
-      limiter.checkNewOrderLimits("acc-1", domains, false, now)
-    ).rejects.toThrowError(AcmeError);
-  });
-
-  it("should grant rate limit exemption for valid ARI renewal orders", async () => {
-    const domains = ["example.com", "www.example.com"];
-    const now = 1700000000;
-
-    // Hit the limit of 5 duplicate orders
-    for (let i = 0; i < 5; i++) {
-      await limiter.checkNewOrderLimits("acc-1", domains, false, now);
-    }
-
-    // Attempting a 6th regular order is blocked
-    await expect(
-      limiter.checkNewOrderLimits("acc-1", domains, false, now)
-    ).rejects.toThrowError(AcmeError);
-
-    // But an ARI Renewal order (isAriRenewal = true) is EXEMPT and succeeds!
-    await expect(
-      limiter.checkNewOrderLimits("acc-1", domains, true, now)
-    ).resolves.not.toThrow();
-  });
-
-  it("should reset the rate limit window after it elapses", async () => {
-    const domains = ["example.com"];
-    const now = 1700000000;
-
-    for (let i = 0; i < CONFIG.RATE_LIMIT_DUPLICATE_CERTS; i++) {
-      await limiter.checkNewOrderLimits("acc-reset", domains, false, now);
-    }
-
-    await expect(
-      limiter.checkNewOrderLimits("acc-reset", domains, false, now)
-    ).rejects.toThrowError(AcmeError);
-
-    await expect(
-      limiter.checkNewOrderLimits(
-        "acc-reset",
-        domains,
-        false,
-        now + CONFIG.RATE_LIMIT_DUPLICATE_WINDOW_SECONDS
-      )
-    ).resolves.not.toThrow();
+    await expect(limiter.checkNewOrderLimits("attacker", now)).rejects.toThrowError(AcmeError);
+    await expect(limiter.checkNewOrderLimits("victim", now)).resolves.toBeUndefined();
+    await expect(limiter.checkNewOrderLimits("attacker", now + CONFIG.RATE_LIMIT_NEW_ORDERS_WINDOW_SECONDS)).resolves.toBeUndefined();
   });
 
   it("should count only failed challenge attempts toward the failed-validation limit", async () => {

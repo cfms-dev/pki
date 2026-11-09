@@ -1,4 +1,4 @@
-import { testAssets } from "./website-test-helpers";
+import { testAssets, testRateLimits } from "./website-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
@@ -92,7 +92,7 @@ describe("CA loading", () => {
 
   it("propagates a missing certificate error during CA selection", async () => {
     CONFIG.CA_DIR = caDir;
-    const env = { ASSETS: testAssets, DB: createMockD1Database(), PK_TEST: "configured-key" };
+    const env = { ...testRateLimits, ASSETS: testAssets, DB: createMockD1Database(), PK_TEST: "configured-key" };
     await expect(selectIntermediateCa(env, { candidates: [ca] })).rejects.toThrow(
       /Failed to read Intermediate CA certificate for 'test-ca'/
     );

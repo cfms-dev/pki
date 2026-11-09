@@ -1,4 +1,4 @@
-import { testAssets } from "./website-test-helpers";
+import { testAssets, testRateLimits } from "./website-test-helpers";
 import { mockCaCertificate } from "./ca-test-helpers";
 import { describe, it, expect } from "vitest";
 import * as x509 from "@peculiar/x509";
@@ -225,7 +225,7 @@ describe("X.509 Certificate Issuance & CSR Handling", () => {
 
     mockCaCertificate(caCert.toString("pem"));
     const mockEnv: AcmeEnv = {
-      ASSETS: testAssets,
+      ...testRateLimits, ASSETS: testAssets,
       DB: createMockD1Database(),
       PK_GENERIC_INTERMEDIATE: caKeyPem,
     };

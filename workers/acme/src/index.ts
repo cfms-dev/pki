@@ -14,6 +14,7 @@ import { handleChallenge } from "./routes/challenge";
 import { handleGetCertificate } from "./routes/certificate";
 import { handleRevokeCert } from "./routes/revoke";
 import { handleRenewalInfo } from "./routes/ari";
+import { checkIngress } from "./ratelimit/ingress";
 
 const schemaInit = new WeakMap<D1Database, Promise<void>>();
 function ensureSchema(database: Database, binding: D1Database): Promise<void> {
@@ -26,6 +27,17 @@ function ensureSchema(database: Database, binding: D1Database): Promise<void> {
 }
 
 export default {
+  async scheduled(_event: ScheduledController, env: AcmeEnv, _ctx: ExecutionContext): Promise<void> {
+    const database = new Database(env.DB);
+    try {
+      await ensureSchema(database, env.DB);
+      const result = await database.cleanupExpiredNonces();
+      console.log(JSON.stringify({ event: result.backlog ? "acme_nonce_cleanup_backlog" : "acme_nonce_cleanup", ...result }));
+    } catch {
+      console.error(JSON.stringify({ event: "acme_nonce_cleanup_failed" }));
+      throw new Error("Nonce cleanup failed");
+    }
+  },
   async fetch(
     request: Request,
     env: AcmeEnv,
@@ -57,13 +69,26 @@ export default {
       });
     }
 
-    const database = new Database(env.DB);
     // Read-only directory discovery never touches D1.
     const isDirectoryRead =
       path === "/directory" &&
       (request.method === "GET" || request.method === "HEAD");
+    if (!isDirectoryRead) {
+      const rejected = await checkIngress(request, path, env, baseUrl);
+      if (rejected) return rejected;
+    }
+    // Do not even access the D1 binding on the read-only discovery path.
+    if (isDirectoryRead) {
+      const response = handleDirectory(request, env, baseUrl);
+      const headers = new Headers(response.headers);
+      headers.set("Link", `<${baseUrl}/directory>;rel="index"`);
+      headers.set("Access-Control-Allow-Origin", "*");
+      headers.set("Access-Control-Expose-Headers", "Link, Location, Replay-Nonce, Retry-After");
+      return new Response(response.body, { status: response.status, headers });
+    }
+    const database = new Database(env.DB);
     try {
-      if (!isDirectoryRead) await ensureSchema(database, env.DB);
+      await ensureSchema(database, env.DB);
       const response = await routeRequest(request, path, database, baseUrl, env);
 
       // In RFC 8555 § 6.5.1, the server MUST include Replay-Nonce on POST responses

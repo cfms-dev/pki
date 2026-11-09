@@ -7,6 +7,7 @@ import { issuanceGroup, RateLimiter } from "../src/ratelimit/limiter";
 import { base64UrlEncode } from "../src/crypto/nonce";
 import { CONFIG } from "../src/config";
 import { createTestEnvironment, registerAccount, createOrder, getAuthorization, makeJwsRequest, getNonce, triggerChallenge, dohAnswer } from "./acme-test-helpers";
+import { issuanceBuckets } from "../src/ratelimit/issuance";
 
 const ipv4: AcmeIdentifier = { type: "ip", value: "93.184.216.34" };
 const ipv6: AcmeIdentifier = { type: "ip", value: "2606:4700:4700::1111" };
@@ -169,8 +170,9 @@ describe("IP ACME issuance and lifecycle", () => {
     expect(issuanceGroup(dns)).toBe("example.com");
     CONFIG.RATE_LIMIT_CERTS_PER_DOMAIN = 1;
     const limiter = new RateLimiter(context.database);
-    await limiter.checkNewOrderLimits("one", [ipv6], false);
-    await expect(limiter.checkNewOrderLimits("two", [{ type: "ip", value: "2606:4700:4700::2222" }], false)).rejects.toThrow("Rate limit");
+    const group = issuanceBuckets([ipv6])[0];
+    await context.d1.prepare("INSERT INTO issuance_ledger VALUES (?, ?, ?)").bind("issued", group.key, Math.floor(Date.now() / 1000)).run();
+    await expect(context.database.assertIssuanceCapacity(issuanceBuckets([{ type: "ip", value: "2606:4700:4700::2222" }]), Math.floor(Date.now() / 1000))).rejects.toThrow("rate limit");
     CONFIG.RATE_LIMIT_FAILED_VALIDATIONS = 1;
     await limiter.recordFailedValidation("one", ipv4);
     await expect(limiter.checkFailedValidationLimit("one", ipv4)).rejects.toThrow(ipv4.value);

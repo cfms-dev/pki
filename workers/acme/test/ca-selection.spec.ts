@@ -1,4 +1,4 @@
-import { testAssets } from "./website-test-helpers";
+import { testAssets, testRateLimits } from "./website-test-helpers";
 import { mockCaCertificate } from "./ca-test-helpers";
 import { describe, it, expect } from "vitest";
 import * as x509 from "@peculiar/x509";
@@ -57,7 +57,7 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
 
     mockCaCertificate(await certificateFor(keys));
     const env: AcmeEnv = {
-      ASSETS: testAssets,
+      ...testRateLimits, ASSETS: testAssets,
       DB: createMockD1Database(),
       PK_GENERIC_INTERMEDIATE: pkPem,
     };
@@ -72,7 +72,7 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
     CONFIG.EXCLUDED_CA_IDS = ["generic-intermediate"];
 
     const env: AcmeEnv = {
-      ASSETS: testAssets,
+      ...testRateLimits, ASSETS: testAssets,
       DB: createMockD1Database(),
       PK_GENERIC_INTERMEDIATE: "some-key",
     };
@@ -84,7 +84,7 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
 
   it("should exclude CAs whose private keys are missing from the environment", async () => {
     const env: AcmeEnv = {
-      ASSETS: testAssets,
+      ...testRateLimits, ASSETS: testAssets,
       DB: createMockD1Database(),
       // PK_GENERIC_INTERMEDIATE is deliberately not set
     };
@@ -111,7 +111,7 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
 
     mockCaCertificate(await certificateFor(caAKeys));
     const env: AcmeEnv = {
-      ASSETS: testAssets,
+      ...testRateLimits, ASSETS: testAssets,
       DB: createMockD1Database(),
       PK_ALPHA: caAPkPem,
       PK_BETA: caAPkPem,
@@ -185,7 +185,7 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
 
     mockCaCertificate(caCert.toString("pem"));
     const mockEnv: AcmeEnv = {
-      ASSETS: testAssets,
+      ...testRateLimits, ASSETS: testAssets,
       DB: createMockD1Database(),
       PK_GENERIC_INTERMEDIATE: caPkPem,
     };
@@ -231,7 +231,7 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
 
     mockCaCertificate(expiredCert.toString("pem"));
     const env: AcmeEnv = {
-      ASSETS: testAssets,
+      ...testRateLimits, ASSETS: testAssets,
       DB: createMockD1Database(),
       PK_GENERIC_INTERMEDIATE: expiredPkPem,
     };
