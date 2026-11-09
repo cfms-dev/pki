@@ -29,6 +29,12 @@ def main() -> None:
         help="path to registry directory (defaults to registry)",
     )
     issue.add_argument(
+        "--revocations-file",
+        type=Path,
+        default=None,
+        help="merged revocation input (defaults to registry/revocations.json)",
+    )
+    issue.add_argument(
         "--valid-days",
         type=int,
         default=7,

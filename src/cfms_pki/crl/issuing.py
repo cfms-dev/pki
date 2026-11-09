@@ -221,7 +221,9 @@ def issue_crl(args: argparse.Namespace) -> None:
     ca_data = json.loads(ca_registry_path.read_text(encoding="utf-8"))
     cas: dict[str, Any] = ca_data.get("cas", {})
 
-    revocations_path = registry_dir / "revocations.json"
+    revocations_path = (
+        getattr(args, "revocations_file", None) or registry_dir / "revocations.json"
+    )
     if revocations_path.exists():
         raw_text = revocations_path.read_text(encoding="utf-8").strip()
         rev_data = json.loads(raw_text) if raw_text else {}
