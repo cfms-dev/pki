@@ -7,7 +7,7 @@ import {
 import { CertificateRow } from "../src/db/types";
 import { handleRenewalInfo } from "../src/routes/ari";
 import { Database } from "../src/db/queries";
-import { AcmeEnv, CONFIG } from "../src/config";
+import { CONFIG } from "../src/config";
 import { createMockD1Database } from "./mock-d1";
 
 describe("RFC 9773 ACME Renewal Information (ARI)", () => {
@@ -146,7 +146,7 @@ describe("RFC 9773 ACME Renewal Information (ARI)", () => {
     expect(resReplaced.reason).toContain("already been replaced");
   });
 
-  it("should configure ARI explanationURL from CONFIG or env", async () => {
+  it("should configure ARI explanationURL only from CONFIG", async () => {
     const d1 = createMockD1Database();
     const db = new Database(d1);
     await db.initSchema();
@@ -178,14 +178,13 @@ describe("RFC 9773 ACME Renewal Information (ARI)", () => {
     const bodyDefault = (await respDefault.json()) as { explanationURL: string };
     expect(bodyDefault.explanationURL).toBe(CONFIG.ARI_EXPLANATION_URL);
 
-    // 2. Custom override via env.ARI_EXPLANATION_URL
-    const customEnv: AcmeEnv = {
-      DB: d1,
-      ARI_EXPLANATION_URL: "https://custom.example.org/ari-explanation",
-    };
-    const respCustom = await handleRenewalInfo(req, db, cert.cert_id, customEnv);
-    expect(respCustom.status).toBe(200);
-    const bodyCustom = (await respCustom.json()) as { explanationURL: string };
-    expect(bodyCustom.explanationURL).toBe("https://custom.example.org/ari-explanation");
+    // 2. Only the code configuration can change or omit the explanation URL.
+    CONFIG.ARI_EXPLANATION_URL = "  https://custom.example.org/ari-explanation  ";
+    const respCustom = await handleRenewalInfo(req, db, cert.cert_id);
+    expect((await respCustom.json() as { explanationURL: string }).explanationURL)
+      .toBe("https://custom.example.org/ari-explanation");
+    CONFIG.ARI_EXPLANATION_URL = "  ";
+    const respEmpty = await handleRenewalInfo(req, db, cert.cert_id);
+    expect(await respEmpty.json()).not.toHaveProperty("explanationURL");
   });
 });

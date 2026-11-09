@@ -1,125 +1,24 @@
-// Configuration constants for CFMS-PKI ACME Server
-
+// Non-sensitive settings are owned here. Environment bindings supply resources and secrets only.
 export interface AcmeEnv {
   DB: D1Database;
-  ACME_BASE_URL?: string;
-  CERT_VALIDITY_DAYS?: string;
-  RENEWAL_WINDOW_DAYS?: string;
-  CA_DIR?: string;
-  CRL_BASE_URL?: string;
-  CA_ID?: string;
-  PK_ENV_VAR?: string;
-  EXCLUDED_CA_IDS?: string; // Comma-separated list of CA identifiers to exclude
-  CA_WEIGHTS?: string;      // JSON string of { [caId]: number }
-  WEBSITE_URL?: string;
-  ARI_EXPLANATION_URL?: string;
-  TERMS_OF_SERVICE_URL?: string;
-  CAA_IDENTITIES?: string | string[];
-  CAA_ISSUER_DOMAIN_NAME?: string;
-  EXTERNAL_ACCOUNT_REQUIRED?: string | boolean;
-  [key: string]: unknown;
-}
-
-// Authoritative Global CAA Issuer Domain Name (RFC 8659)
-export const CAA_ISSUER_DOMAIN_NAME = "cfms-pki.crpteam.club";
-
-// Public URLs & Metadata (RFC 8555 & RFC 9773)
-export const WEBSITE_URL = `https://${CAA_ISSUER_DOMAIN_NAME}`;
-export const ARI_EXPLANATION_URL = `https://${CAA_ISSUER_DOMAIN_NAME}/docs/ari`;
-export const TERMS_OF_SERVICE_URL = "";
-export const CAA_IDENTITIES: string[] | undefined = [CAA_ISSUER_DOMAIN_NAME];
-export const EXTERNAL_ACCOUNT_REQUIRED = false;
-
-/**
- * Resolves the authoritative CAA issuer domain name per RFC 8659.
- * Fallback to CONFIG.CAA_ISSUER_DOMAIN_NAME or default constant if not set.
- */
-export function getCaaIssuerDomainName(env?: AcmeEnv): string {
-  if (typeof env?.CAA_ISSUER_DOMAIN_NAME === "string" && env.CAA_ISSUER_DOMAIN_NAME.trim()) {
-    return env.CAA_ISSUER_DOMAIN_NAME.trim();
-  }
-  const configVal = typeof CONFIG.CAA_ISSUER_DOMAIN_NAME === "string" ? CONFIG.CAA_ISSUER_DOMAIN_NAME.trim() : "";
-  return configVal || CAA_ISSUER_DOMAIN_NAME;
-}
-
-/**
- * Resolves the termsOfService URL per RFC 8555 § 7.1.1.
- * If not specified, returns undefined (omitted from response).
- */
-export function getTermsOfServiceUrl(env?: AcmeEnv): string | undefined {
-  const envVal = typeof env?.TERMS_OF_SERVICE_URL === "string" ? env.TERMS_OF_SERVICE_URL.trim() : "";
-  const configVal = typeof CONFIG.TERMS_OF_SERVICE_URL === "string" ? CONFIG.TERMS_OF_SERVICE_URL.trim() : "";
-  return envVal || configVal || undefined;
-}
-
-/**
- * Resolves the website URL per RFC 8555 § 7.1.1.
- * If not specified or explicitly set to empty, returns undefined.
- */
-export function getWebsiteUrl(env?: AcmeEnv): string | undefined {
-  if (env?.WEBSITE_URL === "") return undefined;
-  const envVal = typeof env?.WEBSITE_URL === "string" ? env.WEBSITE_URL.trim() : "";
-  const configVal = typeof CONFIG.WEBSITE_URL === "string" ? CONFIG.WEBSITE_URL.trim() : "";
-  return envVal || configVal || undefined;
-}
-
-/**
- * Resolves the caaIdentities array per RFC 8555 § 7.1.1.
- * If not specified or empty, returns undefined.
- */
-export function getCaaIdentities(env?: AcmeEnv): string[] | undefined {
-  if (env?.CAA_IDENTITIES === "") return undefined;
-  if (Array.isArray(env?.CAA_IDENTITIES)) {
-    const list = env.CAA_IDENTITIES.filter(Boolean);
-    return list.length > 0 ? list : undefined;
-  }
-  if (typeof env?.CAA_IDENTITIES === "string") {
-    const list = env.CAA_IDENTITIES.split(",").map((s) => s.trim()).filter(Boolean);
-    return list.length > 0 ? list : undefined;
-  }
-  if (env?.CAA_ISSUER_DOMAIN_NAME !== undefined) {
-    const domain = typeof env.CAA_ISSUER_DOMAIN_NAME === "string" ? env.CAA_ISSUER_DOMAIN_NAME.trim() : "";
-    return domain ? [domain] : undefined;
-  }
-  if (Array.isArray(CONFIG.CAA_IDENTITIES)) {
-    const list = CONFIG.CAA_IDENTITIES.filter(Boolean);
-    return list.length > 0 ? list : undefined;
-  }
-  if (CONFIG.CAA_ISSUER_DOMAIN_NAME) {
-    const domain = CONFIG.CAA_ISSUER_DOMAIN_NAME.trim();
-    return domain ? [domain] : undefined;
-  }
-  return undefined;
-}
-
-/**
- * Resolves the externalAccountRequired flag per RFC 8555 § 7.1.1.
- * Returns true only if explicitly set to true. Default is false (omitted from meta).
- */
-export function getExternalAccountRequired(env?: AcmeEnv): boolean {
-  if (env?.EXTERNAL_ACCOUNT_REQUIRED === true || env?.EXTERNAL_ACCOUNT_REQUIRED === "true") {
-    return true;
-  }
-  if (CONFIG.EXTERNAL_ACCOUNT_REQUIRED === true) {
-    return true;
-  }
-  return false;
+  fetch?: typeof fetch;
+  // Private-key binding names come from registry/ca.json via the bundled manifest.
+  [binding: string]: unknown;
 }
 
 export const CONFIG = {
-  // Authoritative Global CAA Issuer Domain Name
-  CAA_ISSUER_DOMAIN_NAME,
+  ACME_BASE_URL: "", // Empty: publish URLs using the request origin.
+  CAA_ISSUER_DOMAIN_NAME: "cfms-pki.crpteam.club",
+  WEBSITE_URL: "https://cfms-pki.crpteam.club",
+  ARI_EXPLANATION_URL: "https://www.rfc-editor.org/rfc/rfc9773.html#section-4.2",
+  TERMS_OF_SERVICE_URL: "",
+  // undefined derives the published identity from CAA_ISSUER_DOMAIN_NAME; [] omits it.
+  CAA_IDENTITIES: undefined as string[] | undefined,
+  EXTERNAL_ACCOUNT_REQUIRED: false,
+  CRL_BASE_URL: "https://cfms-pki.crpteam.club/crl",
 
-  // Public URLs & Metadata
-  WEBSITE_URL,
-  ARI_EXPLANATION_URL,
-  TERMS_OF_SERVICE_URL,
-  CAA_IDENTITIES,
-  EXTERNAL_ACCOUNT_REQUIRED,
-
-  // RFC 8555 defaults
-  DEFAULT_CERT_VALIDITY_DAYS: 90,
-  DEFAULT_RENEWAL_WINDOW_DAYS: 30, // ARI suggested window duration (start = notAfter - 30d, end = notAfter)
+  CERT_VALIDITY_DAYS: 90,
+  RENEWAL_WINDOW_DAYS: 30,
   NONCE_EXPIRATION_SECONDS: 300,   // 5 minutes
   ORDER_EXPIRATION_SECONDS: 86400 * 7, // 7 days
   AUTHZ_EXPIRATION_SECONDS: 86400 * 3, // 3 days
@@ -154,17 +53,32 @@ export const CONFIG = {
   // Relative weights for CA selection (default weight is 1 if unspecified)
   // Higher weight increases probability: P(CA_i) = weight_i / sum(weights)
   CA_WEIGHTS: {} as Record<string, number>, // e.g. { "generic-intermediate": 10, "backup-intermediate": 1 }
-
-  // Default Intermediate CA fallback identifier
-  DEFAULT_CA_ID: "generic-intermediate",
-  DEFAULT_PK_ENV_VAR: "PK_GENERIC_INTERMEDIATE",
 };
 
-/** Positive whole-day configuration; invalid deployment settings fail closed. */
-export function configuredDays(value: unknown, fallback: number): number {
-  if (value === undefined) return fallback;
-  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw new Error("Invalid day configuration");
-  const result = Number(value);
-  if (!Number.isSafeInteger(result)) throw new Error("Invalid day configuration");
-  return result;
+export function getCaaIssuerDomainName(): string {
+  return CONFIG.CAA_ISSUER_DOMAIN_NAME.trim();
+}
+
+export function getTermsOfServiceUrl(): string | undefined {
+  return CONFIG.TERMS_OF_SERVICE_URL.trim() || undefined;
+}
+
+export function getWebsiteUrl(): string | undefined {
+  return CONFIG.WEBSITE_URL.trim() || undefined;
+}
+
+export function getCaaIdentities(): string[] | undefined {
+  const identities = CONFIG.CAA_IDENTITIES ?? [getCaaIssuerDomainName()];
+  const list = identities.map((identity) => identity.trim()).filter(Boolean);
+  return list.length ? list : undefined;
+}
+
+export function getExternalAccountRequired(): boolean {
+  return CONFIG.EXTERNAL_ACCOUNT_REQUIRED;
+}
+
+/** Positive whole-day policy; invalid code configuration fails closed. */
+export function configuredDays(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error("Invalid day configuration");
+  return value;
 }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as x509 from "@peculiar/x509";
+import { CONFIG } from "../src/config";
 import worker from "../src/index";
 import { normalizePublicKey } from "../src/crypto/jws";
 import { importCaPrivateKey } from "../src/crypto/ca";
@@ -201,7 +202,7 @@ describe("migration and issuance fencing", () => {
 
 describe("CA and certificate policy", () => {
   it("caps leaf validity at issuer expiry and preserves the issuer SKI in AKI", async () => {
-    const existing = new x509.X509Certificate(context.env.CA_CERT_PEM as string);
+    const existing = new x509.X509Certificate(context.caFixture.pem);
     const privateKey = await importCaPrivateKey(context.env.PK_GENERIC_INTERMEDIATE as string);
     const ca = await x509.X509CertificateGenerator.create({
       subject: existing.subject, issuer: existing.subject, serialNumber: "1234",
@@ -209,7 +210,7 @@ describe("CA and certificate policy", () => {
       notBefore: new Date(Date.now() - 10000), notAfter: new Date(Date.now() + 3600000),
       extensions: [new x509.BasicConstraintsExtension(true, 0, true), new x509.SubjectKeyIdentifierExtension("aabbccdd")],
     });
-    context.env.CA_CERT_PEM = ca.toString("pem");
+    context.caFixture.pem = ca.toString("pem");
     const issued = await certificate();
     expect(issued.leaf.notAfter.getTime()).toBe(ca.notAfter.getTime());
     expect(issued.leaf.getExtension(x509.AuthorityKeyIdentifierExtension)?.keyId).toBe("aabbccdd");
@@ -235,8 +236,13 @@ describe("CA and certificate policy", () => {
     }
   });
   it("honors configured validity and ARI renewal windows", async () => {
-    context.env.CERT_VALIDITY_DAYS = "7";
-    context.env.RENEWAL_WINDOW_DAYS = "2";
+    CONFIG.CERT_VALIDITY_DAYS = 7;
+    CONFIG.RENEWAL_WINDOW_DAYS = 2;
+    CONFIG.CRL_BASE_URL = "  https://configured.example/crl/  ";
+    Object.assign(context.env, {
+      CERT_VALIDITY_DAYS: "90", RENEWAL_WINDOW_DAYS: "30",
+      CRL_BASE_URL: "https://legacy.example/crl", ARI_EXPLANATION_URL: "https://legacy.example/ari",
+    });
     context.env.fetch = async () => Response.json({ Status: 0 });
     const id = await readyOrder();
     const { response } = await makeJwsRequest(context.env, `${BASE}/order/${id}/finalize`, { csr: await makeCsr(["victim.example.com"]) }, owner, await getNonce(context.env));
@@ -244,10 +250,34 @@ describe("CA and certificate policy", () => {
     const order = await context.database.getOrderById(id);
     const cert = await context.database.getCertificateById(order!.certificate_id!);
     expect(cert!.not_after - cert!.not_before).toBe(7 * 86400);
+    const leaf = new x509.X509Certificate(cert!.pem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)![0]);
+    const crl = leaf.getExtension(x509.CRLDistributionPointsExtension);
+    expect(crl?.distributionPoints[0].distributionPoint?.fullName?.[0].uniformResourceIdentifier)
+      .toBe("https://configured.example/crl/generic-intermediate.crl");
     const info = await worker.fetch(new Request(`${BASE}/renewal-info/${cert!.cert_id}`), context.env, testContext);
-    const body = await info.json() as { suggestedWindow: { start: string; end: string } };
+    const body = await info.json() as { suggestedWindow: { start: string; end: string }; explanationURL: string };
+    expect(body.explanationURL).toBe(CONFIG.ARI_EXPLANATION_URL);
     expect(Date.parse(body.suggestedWindow.end) - Date.parse(body.suggestedWindow.start)).toBe(2 * 86400000);
   });
+  it.each([0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    "fails closed for invalid code-configured validity %s", async (days) => {
+      CONFIG.CERT_VALIDITY_DAYS = days;
+      const result = await makeJwsRequest(context.env, `${BASE}/new-order`,
+        { identifiers: [{ type: "dns", value: "example.com" }] }, owner, await getNonce(context.env));
+      expect(result.response.status).toBe(500);
+      expect(await context.d1.prepare("SELECT COUNT(*) AS count FROM orders").first<{ count: number }>())
+        .toEqual({ count: 0 });
+    }
+  );
+  it.each([0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    "fails closed for invalid code-configured renewal window %s", async (days) => {
+      const issued = await certificate();
+      await context.database.saveCertificate(issued.row);
+      CONFIG.RENEWAL_WINDOW_DAYS = days;
+      const response = await worker.fetch(new Request(`${BASE}/renewal-info/${issued.row.cert_id}`), context.env, testContext);
+      expect(response.status).toBe(500);
+    }
+  );
   it.each(["2026-02-30T00:00:00Z", "2027-01-01T25:00:00Z", "not-a-date"])("rejects invalid validity timestamp %s", async (notBefore) => {
     const result = await makeJwsRequest(context.env, `${BASE}/new-order`, { identifiers: [{ type: "dns", value: "example.com" }], notBefore }, owner, await getNonce(context.env));
     expect(result.response.status).toBe(400);

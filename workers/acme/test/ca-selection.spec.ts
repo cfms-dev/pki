@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mockCaCertificate } from "./ca-test-helpers";
+import { describe, it, expect } from "vitest";
 import * as x509 from "@peculiar/x509";
 import { AcmeEnv, CONFIG } from "../src/config";
 import {
@@ -12,19 +13,6 @@ import { createMockD1Database } from "./mock-d1";
 import { base64UrlEncode } from "../src/crypto/nonce";
 
 describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
-  let originalExclusions: string[];
-  let originalWeights: Record<string, number>;
-
-  beforeEach(() => {
-    originalExclusions = [...CONFIG.EXCLUDED_CA_IDS];
-    originalWeights = { ...CONFIG.CA_WEIGHTS };
-  });
-
-  afterEach(() => {
-    CONFIG.EXCLUDED_CA_IDS = originalExclusions;
-    CONFIG.CA_WEIGHTS = originalWeights;
-  });
-
   it("should dynamically load CA registry and read certificate from designated directory", () => {
     const registry = loadCaRegistry("cas");
     expect(registry.length).toBeGreaterThan(0);
@@ -66,11 +54,10 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
     const pkcs8Der = await crypto.subtle.exportKey("pkcs8", keys.privateKey);
     const pkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(pkcs8Der as ArrayBuffer).toString("base64")}\n-----END PRIVATE KEY-----`;
 
+    mockCaCertificate(await certificateFor(keys));
     const env: AcmeEnv = {
       DB: createMockD1Database(),
-      CA_DIR: "cas",
       PK_GENERIC_INTERMEDIATE: pkPem,
-      CA_CERT_PEM: await certificateFor(keys),
     };
 
     const selected = await selectIntermediateCa(env);
@@ -84,7 +71,6 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
 
     const env: AcmeEnv = {
       DB: createMockD1Database(),
-      CA_DIR: "cas",
       PK_GENERIC_INTERMEDIATE: "some-key",
     };
 
@@ -93,23 +79,31 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
     );
   });
 
-  it("should exclude CA when configured in env.EXCLUDED_CA_IDS", async () => {
+  it("ignores legacy environment exclusions, weights, directory and PEM overrides", async () => {
+    const keys = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]
+    ) as CryptoKeyPair;
+    const fixture = await certificateFor(keys);
+    mockCaCertificate(fixture);
+    const key = Buffer.from(await crypto.subtle.exportKey("pkcs8", keys.privateKey) as ArrayBuffer).toString("base64");
     const env: AcmeEnv = {
       DB: createMockD1Database(),
-      CA_DIR: "cas",
-      EXCLUDED_CA_IDS: "generic-intermediate,other-ca",
-      PK_GENERIC_INTERMEDIATE: "some-key",
+      PK_GENERIC_INTERMEDIATE: `-----BEGIN PRIVATE KEY-----\n${key}\n-----END PRIVATE KEY-----`,
+      EXCLUDED_CA_IDS: "generic-intermediate",
+      CA_WEIGHTS: '{"generic-intermediate":0}',
+      CA_DIR: "missing-directory",
+      CA_CERT_PEM: "invalid legacy override",
+      CA_ID: "other-ca",
+      PK_ENV_VAR: "PK_MISSING",
     };
-
-    await expect(selectIntermediateCa(env)).rejects.toThrowError(
-      /No eligible Intermediate CA available for certificate issuance/
-    );
+    const selected = await selectIntermediateCa(env);
+    expect(selected.certPem).toBe(fixture);
+    expect(selected.ca.id).toBe("generic-intermediate");
   });
 
   it("should exclude CAs whose private keys are missing from the environment", async () => {
     const env: AcmeEnv = {
       DB: createMockD1Database(),
-      CA_DIR: "cas",
       // PK_GENERIC_INTERMEDIATE is deliberately not set
     };
 
@@ -133,12 +127,11 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
       { id: "ca-beta", certFile: "generic-intermediate.pem", pkEnv: "PK_BETA", weight: 1 },   // 25%
     ];
 
+    mockCaCertificate(await certificateFor(caAKeys));
     const env: AcmeEnv = {
       DB: createMockD1Database(),
-      CA_DIR: "cas",
       PK_ALPHA: caAPkPem,
       PK_BETA: caAPkPem,
-      CA_CERT_PEM: await certificateFor(caAKeys),
     };
 
     let alphaCount = 0;
@@ -159,6 +152,12 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
     expect(alphaRatio).toBeLessThan(0.85);
     expect(betaRatio).toBeGreaterThan(0.15);
     expect(betaRatio).toBeLessThan(0.35);
+
+    CONFIG.CA_WEIGHTS = { "ca-alpha": 0, "ca-beta": 2 };
+    env.CA_WEIGHTS = '{"ca-alpha":100,"ca-beta":0}';
+    const configured = await selectIntermediateCa(env, { candidates, random: () => 0 });
+    expect(configured.ca.id).toBe("ca-beta");
+    expect(configured.ca.weight).toBe(2);
   });
 
   it("should issue a certificate using the dynamically selected Intermediate CA", async () => {
@@ -202,10 +201,9 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
       ],
     });
 
+    mockCaCertificate(caCert.toString("pem"));
     const mockEnv: AcmeEnv = {
       DB: createMockD1Database(),
-      CA_DIR: "cas",
-      CA_CERT_PEM: caCert.toString("pem"),
       PK_GENERIC_INTERMEDIATE: caPkPem,
     };
 
@@ -248,10 +246,9 @@ describe("Intermediate CA Dynamic Loading & Weighted Selection", () => {
     });
     const expiredPkPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from((await crypto.subtle.exportKey("pkcs8", expiredKeys.privateKey)) as ArrayBuffer).toString("base64")}\n-----END PRIVATE KEY-----`;
 
+    mockCaCertificate(expiredCert.toString("pem"));
     const env: AcmeEnv = {
       DB: createMockD1Database(),
-      CA_DIR: "cas",
-      CA_CERT_PEM: expiredCert.toString("pem"),
       PK_GENERIC_INTERMEDIATE: expiredPkPem,
     };
 

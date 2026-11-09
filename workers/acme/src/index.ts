@@ -1,5 +1,5 @@
 import "reflect-metadata";
-import { AcmeEnv } from "./config";
+import { AcmeEnv, CONFIG } from "./config";
 import { Database } from "./db/queries";
 import { AcmeError } from "./errors";
 import { createAndSaveNonce } from "./crypto/nonce";
@@ -32,7 +32,7 @@ export default {
     ctx: ExecutionContext
   ): Promise<Response> {
     const url = new URL(request.url);
-    const baseUrl = env.ACME_BASE_URL || url.origin;
+    const baseUrl = CONFIG.ACME_BASE_URL.trim() || url.origin;
     bindPublishedRequestUrl(request, baseUrl);
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const database = new Database(env.DB);
@@ -213,7 +213,7 @@ async function routeRequest(
   // RFC 9773 ACME Renewal Information (ARI)
   const ariMatch = path.match(/^\/renewal-info\/([a-zA-Z0-9_.-]+)$/);
   if (ariMatch) {
-    return await handleRenewalInfo(request, database, ariMatch[1], env);
+    return await handleRenewalInfo(request, database, ariMatch[1]);
   }
 
   throw AcmeError.notFound(`Endpoint '${path}' not found`);

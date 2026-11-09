@@ -1,7 +1,8 @@
+import { mockCaCertificate } from "./ca-test-helpers";
 import { migrateAccountPublicKeyFingerprints } from "../src/db/account-keys";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as x509 from "@peculiar/x509";
-import { CAA_ISSUER_DOMAIN_NAME, CONFIG, AcmeEnv, getCaaIssuerDomainName } from "../src/config";
+import { CONFIG, AcmeEnv, getCaaIssuerDomainName } from "../src/config";
 import { handleDirectory } from "../src/routes/directory";
 import {
   CaaRecord,
@@ -25,12 +26,11 @@ import { calculateJwkThumbprint } from "../src/crypto/jws";
 
 describe("Unified CAA Identity & RFC 8659 Validation", () => {
   describe("1. Configuration and ACME Directory", () => {
-    it("should export CAA_ISSUER_DOMAIN_NAME as cfms-pki.crpteam.club", () => {
-      expect(CAA_ISSUER_DOMAIN_NAME).toBe("cfms-pki.crpteam.club");
-      expect(CONFIG.CAA_ISSUER_DOMAIN_NAME).toBe("cfms-pki.crpteam.club");
+    it("should export CONFIG.CAA_ISSUER_DOMAIN_NAME as cfms-pki.crpteam.club", () => {
+      expect(getCaaIssuerDomainName()).toBe("cfms-pki.crpteam.club");
     });
 
-    it("should publish CAA_ISSUER_DOMAIN_NAME in ACME Directory meta.caaIdentities", async () => {
+    it("should publish CONFIG.CAA_ISSUER_DOMAIN_NAME in ACME Directory meta.caaIdentities", async () => {
       const mockEnv: AcmeEnv = { DB: createMockD1Database() };
       const resp = handleDirectory(
         new Request("https://acme.test/directory"),
@@ -44,16 +44,16 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
       };
       expect(data.meta).toBeDefined();
       expect(data.meta.caaIdentities).toEqual(["cfms-pki.crpteam.club"]);
-      expect(data.meta.caaIdentities[0]).toBe(CAA_ISSUER_DOMAIN_NAME);
+      expect(data.meta.caaIdentities[0]).toBe(CONFIG.CAA_ISSUER_DOMAIN_NAME);
       expect(data.meta.website).toBe(CONFIG.WEBSITE_URL);
       expect((data.meta as any).termsOfService).toBeUndefined();
     });
 
-    it("should allow overriding website and termsOfService via env", async () => {
+    it("should allow overriding website and termsOfService via CONFIG", async () => {
+      CONFIG.WEBSITE_URL = "https://custom.example.org";
+      CONFIG.TERMS_OF_SERVICE_URL = "https://custom.example.org/tos";
       const customEnv: AcmeEnv = {
         DB: createMockD1Database(),
-        WEBSITE_URL: "https://custom.example.org",
-        TERMS_OF_SERVICE_URL: "https://custom.example.org/tos",
       };
       const resp = handleDirectory(
         new Request("https://acme.test/directory"),
@@ -69,21 +69,16 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
       expect(data.meta.termsOfService).toBe("https://custom.example.org/tos");
     });
 
-    it("should resolve CAA_ISSUER_DOMAIN_NAME via getCaaIssuerDomainName and allow env override", () => {
+    it("resolves only the configured CAA issuer", () => {
       expect(getCaaIssuerDomainName()).toBe("cfms-pki.crpteam.club");
-      expect(getCaaIssuerDomainName({ DB: createMockD1Database() })).toBe("cfms-pki.crpteam.club");
-      expect(
-        getCaaIssuerDomainName({
-          DB: createMockD1Database(),
-          CAA_ISSUER_DOMAIN_NAME: "custom-caa.example.com",
-        })
-      ).toBe("custom-caa.example.com");
+      CONFIG.CAA_ISSUER_DOMAIN_NAME = "custom-caa.example.com";
+      expect(getCaaIssuerDomainName()).toBe("custom-caa.example.com");
     });
 
-    it("should allow overriding CAA_ISSUER_DOMAIN_NAME in ACME Directory meta.caaIdentities via env", async () => {
+    it("publishes the configured CAA issuer in directory metadata", async () => {
+      CONFIG.CAA_ISSUER_DOMAIN_NAME = "custom-caa.example.com";
       const customEnv: AcmeEnv = {
         DB: createMockD1Database(),
-        CAA_ISSUER_DOMAIN_NAME: "custom-caa.example.com",
       };
       const resp = handleDirectory(
         new Request("https://acme.test/directory"),
@@ -98,10 +93,10 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
       expect(data.meta.caaIdentities).toEqual(["custom-caa.example.com"]);
     });
 
-    it("should validate CAA for order according to CAA_ISSUER_DOMAIN_NAME in env", async () => {
+    it("validates orders against the configured CAA issuer", async () => {
+      CONFIG.CAA_ISSUER_DOMAIN_NAME = "custom-caa.example.com";
       const customEnv: AcmeEnv = {
         DB: createMockD1Database(),
-        CAA_ISSUER_DOMAIN_NAME: "custom-caa.example.com",
       };
 
       // Mock DNS responses: custom-caa.example.com is permitted, cfms-pki is not in the record
@@ -114,12 +109,13 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
           { status: 200, headers: { "Content-Type": "application/dns-json" } }
         );
 
-      // Should succeed with customEnv
+      // Should succeed with the configured issuer
       await expect(
         validateCaaForOrder(["example.org"], "https://acme.test/account/1", customEnv, mockFetch)
       ).resolves.toBeUndefined();
 
-      // Should fail with default env because record is for custom-caa.example.com
+      // Switching the code configuration changes CAA validation.
+      CONFIG.CAA_ISSUER_DOMAIN_NAME = "cfms-pki.crpteam.club";
       const defaultEnv: AcmeEnv = { DB: createMockD1Database() };
       await expect(
         validateCaaForOrder(["example.org"], "https://acme.test/account/1", defaultEnv, mockFetch)
@@ -198,7 +194,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
   });
 
   describe("3. RFC 8659 CAA Authorization Logic", () => {
-    it("should permit non-wildcard domain when issue matches CAA_ISSUER_DOMAIN_NAME", () => {
+    it("should permit non-wildcard domain when issue matches CONFIG.CAA_ISSUER_DOMAIN_NAME", () => {
       const records: CaaRecord[] = [
         {
           flags: 0,
@@ -306,7 +302,7 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
       expect(res.error).toContain("CAA issuewild record forbids issuance for wildcard domain");
     });
 
-    it("should authorize wildcard domain when issuewild matches CAA_ISSUER_DOMAIN_NAME", () => {
+    it("should authorize wildcard domain when issuewild matches CONFIG.CAA_ISSUER_DOMAIN_NAME", () => {
       const records: CaaRecord[] = [
         {
           flags: 0,
@@ -666,8 +662,8 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
     });
 
     it("should never change the CAA identity regardless of which intermediate CA is selected", async () => {
-      // Regardless of selecting ca-alpha or ca-beta, the CAA validation identity is strictly CAA_ISSUER_DOMAIN_NAME
-      expect(CAA_ISSUER_DOMAIN_NAME).toBe("cfms-pki.crpteam.club");
+      // Regardless of selecting ca-alpha or ca-beta, the CAA validation identity is strictly CONFIG.CAA_ISSUER_DOMAIN_NAME
+      expect(CONFIG.CAA_ISSUER_DOMAIN_NAME).toBe("cfms-pki.crpteam.club");
     });
   });
 
@@ -836,10 +832,9 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
         });
       };
 
+      mockCaCertificate(caCertPem);
       const mockEnv: AcmeEnv = {
         DB: d1,
-        CA_DIR: "cas",
-        CA_CERT_PEM: caCertPem,
         PK_GENERIC_INTERMEDIATE: caPkPem,
         fetch: mockFetch,
       };
@@ -941,10 +936,9 @@ describe("Unified CAA Identity & RFC 8659 Validation", () => {
         });
       };
 
+      mockCaCertificate(caCertPem);
       const mockEnv: AcmeEnv = {
         DB: d1,
-        CA_DIR: "cas",
-        CA_CERT_PEM: caCertPem,
         PK_GENERIC_INTERMEDIATE: caPkPem,
         fetch: mockFetch,
       };

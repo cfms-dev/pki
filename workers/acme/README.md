@@ -331,7 +331,50 @@ Each challenge row stores its own token, status, error problem document,
 
 ## Configuration
 
-New constants in `src/config.ts`:
+Each setting has one authoritative source. Non-sensitive Worker settings belong
+in the exported `CONFIG` object in `src/config.ts`; changing them requires a
+build and deployment. Environment variables do not override or merge with them.
+
+| Source | Responsibility |
+| --- | --- |
+| `src/config.ts` | Certificate policy, renewal window, URLs, directory metadata, CAA issuer, CA exclusions/weights, rate limits and timeouts |
+| Worker bindings/secrets | `DB` and private keys whose binding names are declared in the CA registry |
+| `registry/ca.json` | CA IDs, public certificate locations, private-key binding names and optional CRL paths; generates the bundled manifest |
+| `wrangler.toml` | Deployment, resource bindings and bundling; contains no business configuration in `[vars]` |
+
+`CERT_VALIDITY_DAYS` and `RENEWAL_WINDOW_DAYS` are positive safe integer numbers,
+currently `90` and `30`. `ACME_BASE_URL` is empty by default, so published URLs
+use the request origin; set it in `CONFIG` to publish a fixed URL.
+`CRL_BASE_URL` is `https://cfms-pki.crpteam.club/crl`, and
+`ARI_EXPLANATION_URL` is
+`https://www.rfc-editor.org/rfc/rfc9773.html#section-4.2`.
+
+Optional metadata URLs are trimmed and omitted when empty.
+`CAA_IDENTITIES: undefined` derives directory identities from
+`CAA_ISSUER_DOMAIN_NAME`; an explicit array supplies the published list, and
+`[]` omits it. CAA enforcement always uses `CAA_ISSUER_DOMAIN_NAME`.
+`EXTERNAL_ACCOUNT_REQUIRED: false` omits that directory flag; this refactor does
+not add EAB enforcement. Terms of service are disabled by default with an empty
+`TERMS_OF_SERVICE_URL`.
+
+`CA_DIR: "cas"` is the local certificate-read directory and must match the
+existing build convention. The bundler writes `cas`, Wrangler bundles that
+folder, and Workers read the manifest and public certificates from `/bundle`.
+The manifest is generated, not a second place to edit CA registration.
+CA public certificates cannot be replaced by environment bindings.
+
+Removed environment settings (including any dashboard or `.dev.vars` copies):
+`ACME_BASE_URL`, `CERT_VALIDITY_DAYS`, `RENEWAL_WINDOW_DAYS`, `CA_DIR`,
+`CRL_BASE_URL`, `EXCLUDED_CA_IDS`, `CA_WEIGHTS`, `WEBSITE_URL`,
+`ARI_EXPLANATION_URL`, `TERMS_OF_SERVICE_URL`, `CAA_IDENTITIES`,
+`CAA_ISSUER_DOMAIN_NAME`, `EXTERNAL_ACCOUNT_REQUIRED`, `CA_CERT_PEM`, `CA_ID`
+and `PK_ENV_VAR`. Legacy values have no effect. Before deploying, inspect old
+deployment variables and move any intended custom values into `CONFIG`, then
+remove those variables. Keep CA registration and key-binding names in the
+registry, and key material in secrets. No database migration or changes to
+already issued certificates are needed.
+
+HTTP-01 settings in the same `CONFIG` object:
 
 | Constant | Default | Purpose |
 | --- | --- | --- |
@@ -469,9 +512,9 @@ Use Node.js 26.13.0 and npm 12.2.2. Run `npm ci`, `npm run typecheck`,
 The runtime test uses Wrangler's exact bundled workerd/Miniflare version and
 performs a local D1 upgrade and certificate issuance with disposable CA material.
 
-`CERT_VALIDITY_DAYS` and `RENEWAL_WINDOW_DAYS` must be positive integer day
-counts. The issuance interval is capped by the selected CA's expiration.
-`CRL_BASE_URL` defaults to `https://cfms-pki.crpteam.club/crl`; newly issued
+`CONFIG.CERT_VALIDITY_DAYS` and `CONFIG.RENEWAL_WINDOW_DAYS` must be positive
+safe integer day counts. The issuance interval is capped by the selected CA's expiration.
+`CONFIG.CRL_BASE_URL` is set to `https://cfms-pki.crpteam.club/crl`; newly issued
 certificates include a per-CA CRL distribution point. No retroactive certificate
 extension changes are possible.
 

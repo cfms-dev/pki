@@ -1,3 +1,4 @@
+import { mockCaCertificate } from "./ca-test-helpers";
 import { describe, it, expect } from "vitest";
 import * as x509 from "@peculiar/x509";
 import {
@@ -221,11 +222,10 @@ describe("X.509 Certificate Issuance & CSR Handling", () => {
       ],
     });
 
+    mockCaCertificate(caCert.toString("pem"));
     const mockEnv: AcmeEnv = {
       DB: createMockD1Database(),
-      CA_CERT_PEM: caCert.toString("pem"),
       PK_GENERIC_INTERMEDIATE: caKeyPem,
-      PK_ENV_VAR: "PK_GENERIC_INTERMEDIATE",
     };
 
     // 3. Issue certificate

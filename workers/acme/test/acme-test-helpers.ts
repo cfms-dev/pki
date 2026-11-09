@@ -1,3 +1,4 @@
+import { mockCaCertificate } from "./ca-test-helpers";
 import * as x509 from "@peculiar/x509";
 import worker from "../src/index";
 import { AcmeEnv } from "../src/config";
@@ -23,6 +24,7 @@ export interface TestEnvironment {
   env: AcmeEnv;
   database: Database;
   d1: D1Database;
+  caFixture: { pem: string };
 }
 
 interface CaMaterial {
@@ -69,15 +71,13 @@ export async function createTestEnvironment(): Promise<TestEnvironment> {
   const database = new Database(d1);
   await database.initSchema();
 
+  const caFixture = mockCaCertificate(ca.certPem);
   const env: AcmeEnv = {
     DB: d1,
-    ACME_BASE_URL,
-    CA_CERT_PEM: ca.certPem,
     PK_GENERIC_INTERMEDIATE: ca.keyPem,
-    PK_ENV_VAR: "PK_GENERIC_INTERMEDIATE",
   };
 
-  return { env, database, d1 };
+  return { env, database, d1, caFixture };
 }
 
 export const testContext = {

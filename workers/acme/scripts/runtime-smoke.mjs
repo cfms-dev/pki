@@ -39,13 +39,19 @@ try {
     ],
     compatibilityDate: "2026-11-05", compatibilityFlags: ["nodejs_compat"],
     d1Databases: ["DB"],
-    bindings: { ACME_BASE_URL: "https://acme.runtime.test", PK_GENERIC_INTERMEDIATE: `-----BEGIN PRIVATE KEY-----\n${key}\n-----END PRIVATE KEY-----` },
+    bindings: { PK_GENERIC_INTERMEDIATE: `-----BEGIN PRIVATE KEY-----\n${key}\n-----END PRIVATE KEY-----` },
     outboundService: async (request) => {
       assert.ok(request.url.includes("type=CAA"), "Unexpected external runtime request");
       return Response.json({ Status: 0, Answer: [] });
     },
   }));
   const base = "https://acme.runtime.test";
+  const discovery = await runtime.dispatchFetch(`${base}/directory`);
+  assert.equal(discovery.status, 200);
+  const directoryBody = await discovery.json();
+  assert.equal(directoryBody.newAccount, `${base}/new-account`);
+  assert.equal(directoryBody.meta.website, "https://cfms-pki.crpteam.club");
+  assert.deepEqual(directoryBody.meta.caaIdentities, ["cfms-pki.crpteam.club"]);
   const accountKeys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
   const accountJwk = await crypto.subtle.exportKey("jwk", accountKeys.publicKey);
   const b64 = (value) => Buffer.from(value).toString("base64url");
@@ -84,7 +90,16 @@ try {
   const chain = await downloaded.text();
   const leaf = new x509.X509Certificate(chain.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)[0]);
   assert.equal(await leaf.verify({ publicKey: ca.publicKey, signatureOnly: true }), true);
-  assert.ok(leaf.getExtension(x509.CRLDistributionPointsExtension));
+  assert.equal(leaf.getExtension(x509.CRLDistributionPointsExtension)
+    ?.distributionPoints[0].distributionPoint?.fullName?.[0].uniformResourceIdentifier,
+    "https://cfms-pki.crpteam.club/crl/generic-intermediate.crl");
+  const certificate = await db.prepare("SELECT cert_id FROM certificates").first();
+  const renewal = await runtime.dispatchFetch(`${base}/renewal-info/${certificate.cert_id}`);
+  assert.equal(renewal.status, 200);
+  const renewalBody = await renewal.json();
+  assert.equal(renewalBody.explanationURL, "https://www.rfc-editor.org/rfc/rfc9773.html#section-4.2");
+  assert.equal(Date.parse(renewalBody.suggestedWindow.end) - Date.parse(renewalBody.suggestedWindow.start), 30 * 86400000);
+  assert.equal(leaf.notAfter.getTime() - leaf.notBefore.getTime(), 90 * 86400000);
   assert.equal((await db.prepare("SELECT ca_id FROM certificates").first()).ca_id, "generic-intermediate");
   console.log("Workers runtime smoke passed: legacy D1 migration, bundled CA read, issuance, signature and CRL distribution point");
 } finally {

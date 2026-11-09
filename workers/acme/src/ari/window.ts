@@ -1,4 +1,4 @@
-import { CONFIG } from "../config";
+import { CONFIG, configuredDays } from "../config";
 import { CertificateRow } from "../db/types";
 
 export interface AriSuggestedWindow {
@@ -16,7 +16,7 @@ export interface AriResponse {
  */
 export function computeSuggestedWindow(
   cert: CertificateRow,
-  renewalWindowDays = CONFIG.DEFAULT_RENEWAL_WINDOW_DAYS,
+  renewalWindowDays = CONFIG.RENEWAL_WINDOW_DAYS,
   now = Math.floor(Date.now() / 1000)
 ): AriSuggestedWindow {
   // If certificate is revoked or marked for immediate replacement,
@@ -32,7 +32,7 @@ export function computeSuggestedWindow(
 
   // Standard window: duration of 30 days ending at not_after
   // (e.g. For 90-day validity: from day 60 to day 90)
-  const windowSeconds = renewalWindowDays * 86400;
+  const windowSeconds = configuredDays(renewalWindowDays) * 86400;
   const startSec = Math.max(cert.not_before, cert.not_after - windowSeconds);
   const endSec = cert.not_after;
 
@@ -49,7 +49,7 @@ export function checkAriRenewalEligibility(
   predecessorCert: CertificateRow,
   requestedDomains: string[],
   now = Math.floor(Date.now() / 1000),
-  renewalWindowDays = CONFIG.DEFAULT_RENEWAL_WINDOW_DAYS
+  renewalWindowDays = CONFIG.RENEWAL_WINDOW_DAYS
 ): { eligible: boolean; reason?: string } {
   // 1. Check if predecessor has already been replaced
   if (predecessorCert.replaced_by_cert_id) {

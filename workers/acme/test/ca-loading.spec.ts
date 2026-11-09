@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { CONFIG } from "../src/config";
 import { loadCaRegistry, readCaCertPem, selectIntermediateCa } from "../src/crypto/ca";
 import { createMockD1Database } from "./mock-d1";
 
@@ -81,23 +82,16 @@ describe("CA loading", () => {
   });
 
   it.each(["not PEM", "-----BEGIN CERTIFICATE-----\nmissing end marker"])(
-    "rejects malformed PEM from files and overrides",
+    "rejects malformed PEM from files",
     (pem) => {
       fs.writeFileSync(path.join(caDir, ca.certFile), pem);
       expect(() => readCaCertPem(ca, caDir)).toThrow(/invalid PEM format/);
-      const env = { DB: createMockD1Database(), CA_CERT_PEM: pem };
-      expect(() => readCaCertPem(ca, caDir, env)).toThrow(/invalid PEM format/);
     }
   );
 
-  it("uses a PEM override only for the matching CA", () => {
-    const env = { DB: createMockD1Database(), CA_CERT_PEM: certPem, CA_ID: ca.id };
-    expect(readCaCertPem(ca, caDir, env)).toBe(certPem);
-    expect(() => readCaCertPem(ca, caDir, { ...env, CA_ID: "other-ca" })).toThrow(/Failed to read/);
-  });
-
   it("propagates a missing certificate error during CA selection", async () => {
-    const env = { DB: createMockD1Database(), CA_DIR: caDir, PK_TEST: "configured-key" };
+    CONFIG.CA_DIR = caDir;
+    const env = { DB: createMockD1Database(), PK_TEST: "configured-key" };
     await expect(selectIntermediateCa(env, { candidates: [ca] })).rejects.toThrow(
       /Failed to read Intermediate CA certificate for 'test-ca'/
     );

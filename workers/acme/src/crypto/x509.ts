@@ -1,6 +1,6 @@
 import "reflect-metadata";
 import * as x509 from "@peculiar/x509";
-import { AcmeEnv, CONFIG } from "../config";
+import { AcmeEnv, CONFIG, configuredDays } from "../config";
 import { AcmeError } from "../errors";
 import { isValidDnsIdentifier } from "../acme/identifiers";
 import { base64UrlDecode } from "./nonce";
@@ -166,7 +166,7 @@ export async function issueCertificateFromCsr(
   csr: x509.Pkcs10CertificateRequest,
   authorizedDomains: string[],
   env: AcmeEnv,
-  validityDays = CONFIG.DEFAULT_CERT_VALIDITY_DAYS,
+  validityDays = CONFIG.CERT_VALIDITY_DAYS,
   explicitCa?: SelectedIntermediateCa,
   requested?: { notBefore: number | null; notAfter: number | null }
 ): Promise<IssuedCertificate> {
@@ -177,7 +177,7 @@ export async function issueCertificateFromCsr(
 
   const now = new Date();
   const notBefore = requested?.notBefore ? new Date(requested.notBefore * 1000) : now;
-  const maximumEnd = Math.min(notBefore.getTime() + validityDays * 86400 * 1000, caCert.notAfter.getTime());
+  const maximumEnd = Math.min(notBefore.getTime() + configuredDays(validityDays) * 86400 * 1000, caCert.notAfter.getTime());
   const notAfter = requested?.notAfter ? new Date(requested.notAfter * 1000) : new Date(maximumEnd);
   if (notBefore < caCert.notBefore || notBefore >= caCert.notAfter || notAfter <= notBefore || notAfter.getTime() > maximumEnd || notAfter <= now) {
     throw AcmeError.badCSR("Requested certificate validity exceeds issuer validity or policy");
@@ -211,7 +211,7 @@ export async function issueCertificateFromCsr(
     skiExt,
     akiExt,
     new x509.CRLDistributionPointsExtension([
-      `${(env.CRL_BASE_URL || "https://cfms-pki.crpteam.club/crl").replace(/\/$/, "")}/${encodeURIComponent(selected.ca.crlFile || `${selected.ca.id}.crl`)}`,
+      `${CONFIG.CRL_BASE_URL.trim().replace(/\/$/, "")}/${encodeURIComponent(selected.ca.crlFile || `${selected.ca.id}.crl`)}`,
     ]),
   ];
 

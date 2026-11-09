@@ -1,3 +1,4 @@
+import { mockCaCertificate } from "./ca-test-helpers";
 import { describe, it, expect, beforeEach } from "vitest";
 import * as x509 from "@peculiar/x509";
 import worker from "../src/index";
@@ -41,12 +42,10 @@ describe("ACME RFC 8555 & RFC 9773 ARI End-to-End Suite", () => {
     const pkcs8Der = await crypto.subtle.exportKey("pkcs8", caKeys.privateKey);
     caKeyPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(pkcs8Der as ArrayBuffer).toString("base64")}\n-----END PRIVATE KEY-----`;
 
+    mockCaCertificate(caCertPem);
     env = {
       DB: createMockD1Database(),
-      ACME_BASE_URL: "https://acme.test",
-      CA_CERT_PEM: caCertPem,
       PK_GENERIC_INTERMEDIATE: caKeyPem,
-      PK_ENV_VAR: "PK_GENERIC_INTERMEDIATE",
       fetch: async (input: RequestInfo | URL) => {
         if (!String(input).includes("type=CAA")) return globalThis.fetch(input);
         return new Response(JSON.stringify({ Status: 0 }), { headers: { "Content-Type": "application/dns-json" } });

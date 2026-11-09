@@ -96,18 +96,14 @@ export async function importCaPrivateKey(pkPem: string): Promise<CryptoKey> {
   }
 }
 
-/** Reads a bundled CA certificate, or an explicit test override. */
+/** Reads the bundled CA certificate. */
 export function readCaCertPem(
   ca: IntermediateCaEntry,
-  caDir = CONFIG.CA_DIR,
-  env?: AcmeEnv
+  caDir = CONFIG.CA_DIR
 ): string {
   let pem: string;
   try {
-    const override = typeof env?.CA_CERT_PEM === "string" ? env.CA_CERT_PEM.trim() : "";
-    pem = override && (!env?.CA_ID || env.CA_ID === ca.id)
-      ? override
-      : readCaFile(ca.certFile, caDir).trim();
+    pem = readCaFile(ca.certFile, caDir).trim();
   } catch (err) {
     throw AcmeError.serverInternal(
       `Failed to read Intermediate CA certificate for '${ca.id}': ${err instanceof Error ? err.message : String(err)}`
@@ -267,7 +263,7 @@ export function secureRandom(): number {
 
 /**
  * Selects an Intermediate CA using weighted random selection,
- * taking into account exclusion lists in config.ts / env and ensuring
+ * taking into account exclusion lists in config.ts and ensuring
  * the required private key is configured in the environment.
  */
 export async function selectIntermediateCa(
@@ -279,31 +275,11 @@ export async function selectIntermediateCa(
     revokedSerials?: Set<string>;
   }
 ): Promise<SelectedIntermediateCa> {
-  const caDir = env.CA_DIR || CONFIG.CA_DIR;
+  const caDir = CONFIG.CA_DIR;
   const candidates = options?.candidates || loadCaRegistry(caDir);
 
-  // Build exclusion set
-  const excludedSet = new Set<string>(CONFIG.EXCLUDED_CA_IDS || []);
-  if (env.EXCLUDED_CA_IDS && typeof env.EXCLUDED_CA_IDS === "string") {
-    env.EXCLUDED_CA_IDS.split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .forEach((id) => excludedSet.add(id));
-  }
-
-  // Parse custom weights
-  let customWeights: Record<string, number> = { ...(CONFIG.CA_WEIGHTS || {}) };
-  if (env.CA_WEIGHTS) {
-    try {
-      const parsedWeights =
-        typeof env.CA_WEIGHTS === "string"
-          ? JSON.parse(env.CA_WEIGHTS)
-          : env.CA_WEIGHTS;
-      customWeights = { ...customWeights, ...parsedWeights };
-    } catch {
-      // Ignore malformed env JSON
-    }
-  }
+  const excludedSet = new Set(CONFIG.EXCLUDED_CA_IDS);
+  const customWeights = CONFIG.CA_WEIGHTS;
 
   // Filter eligible CAs
   const eligible: Array<
@@ -331,7 +307,7 @@ export async function selectIntermediateCa(
     }
 
     // 4. Read the certificate; missing files indicate a broken bundle.
-    const certPem = readCaCertPem(ca, caDir, env);
+    const certPem = readCaCertPem(ca, caDir);
 
     // 5. Check certificate eligibility
     const val = validateIntermediateCaCertificate(ca, certPem, now, options?.revokedSerials);

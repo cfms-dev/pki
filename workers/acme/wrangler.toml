@@ -38,11 +38,3 @@ persist = true
 
 [observability.issues]
 enabled = true
-
-[vars]
-CERT_VALIDITY_DAYS = "90"
-RENEWAL_WINDOW_DAYS = "30"
-CA_DIR = "cas"
-CAA_ISSUER_DOMAIN_NAME = "cfms-pki.crpteam.club"
-WEBSITE_URL = "https://cfms-pki.crpteam.club"
-ARI_EXPLANATION_URL = "https://www.rfc-editor.org/rfc/rfc9773.html#section-4.2"

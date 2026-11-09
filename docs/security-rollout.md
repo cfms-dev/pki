@@ -74,8 +74,8 @@ Pages 工作流每小时第 17 分钟运行，也可手动触发。导出器分�
 失败的 Actions 运行就是发布故障信号，应检查权限、证书归属和 CRL `nextUpdate`。
 小时级调度不等于实时撤销，GitHub 排队也可能延迟发布。
 
-新证书使用 `CRL_BASE_URL/<crl-file>`（默认 `<ca-id>.crl`，支持注册表 `crl_path` 的文件名），默认基址为
-`https://cfms-pki.crpteam.club/crl`。若站点域名不同，应在签发前设置该变量。
+新证书使用 `CONFIG.CRL_BASE_URL/<crl-file>`（默认 `<ca-id>.crl`，支持注册表 `crl_path` 的文件名），默认基址为
+`https://cfms-pki.crpteam.club/crl`。若站点域名不同，应在签发前修改 `workers/acme/src/config.ts` 中的该配置并重新部署。
 历史证书无法补加扩展，客户端需要既有的撤销检查配置或重签证书。
 新增 CA 时还需给 CRL 工作流配置其对应的签名私钥，保持注册表、Worker
 证书包和 Pages 输出一致。
@@ -91,3 +91,29 @@ CA 归属、序列号和有效期。生产凭据和线上验证未包含在本�
 保留安全修复的回退版本。D1 恢复前须核对备份之后的全部签发和撤销，避免丢失状态。
 
 管理脚本使用 Cloudflare 官方 [D1 Query API](https://developers.cloudflare.com/api/resources/d1/subresources/database/methods/query/) 的单查询及 `batch` 请求结构。
+
+
+## Worker 配置来源迁移
+
+非敏感设置只在 `workers/acme/src/config.ts` 的 `CONFIG` 对象维护；环境仅提供
+`DB` 资源绑定、注册表指定名称的 CA 私钥及现有测试用 `fetch` 注入。
+`registry/ca.json` 负责 CA 标识、证书文件和私钥绑定名称，构建生成 manifest；
+不要直接编辑生成文件。Wrangler 负责部署和资源绑定，不再通过 `[vars]` 设置业务参数。
+Python 工具和 CI 管理脚本所需的 Cloudflare 凭据配置保持不变。
+
+发布前核对 Cloudflare 控制台、部署脚本及本地 `.dev.vars` 中的旧设置：
+`ACME_BASE_URL`、`CERT_VALIDITY_DAYS`、`RENEWAL_WINDOW_DAYS`、`CA_DIR`、
+`CRL_BASE_URL`、`EXCLUDED_CA_IDS`、`CA_WEIGHTS`、`WEBSITE_URL`、
+`ARI_EXPLANATION_URL`、`TERMS_OF_SERVICE_URL`、`CAA_IDENTITIES`、
+`CAA_ISSUER_DOMAIN_NAME`、`EXTERNAL_ACCOUNT_REQUIRED`。
+若存在需要保留的定制值，先迁入 `CONFIG` 再发布，然后移除旧变量。
+`CA_CERT_PEM`、`CA_ID`、`PK_ENV_VAR` 入口同时移除；CA 证书来自 bundle，
+私钥绑定名称来自注册表。这些旧变量在新版本中均不生效，没有兼容回退。
+
+代码中的证书有效期与续期窗口分别为数字 `90`、`30`，必须是正安全整数。
+`ACME_BASE_URL` 默认留空，沿用请求 origin；需要固定对外地址时只在代码中设置。
+ARI 说明链接保留原 Wrangler 配置中的 RFC 9773 第 4.2 节链接。
+可选元数据 URL 去除首尾空白后为空则省略；`CAA_IDENTITIES` 未设置时从 issuer
+派生，显式 `[]` 则省略；EAB 标志默认为 false，条款 URL 默认为空。
+本次迁移不修改数据库和历史证书。发布后检查 `/directory`、ARI 响应及新签发证书的
+有效期与 CRL 扩展；回滚使用此前 Worker 版本，并恢复该版本需要的环境设置。

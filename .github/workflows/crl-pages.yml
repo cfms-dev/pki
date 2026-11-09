@@ -38,10 +38,10 @@ jobs:
         with:
           enable-cache: true
           version: '0.13.5'
-          python-version: '3.15.2'
+          python-version: '3.15'
 
       - name: Install Python
-        run: uv python install 3.15.2
+        run: uv python install 3.15
 
       - name: Install locked dependencies
         run: uv sync --locked --no-dev

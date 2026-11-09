@@ -37,7 +37,7 @@ export async function handleNewOrder(
   }
 
   // RFC 8555 § 7.3.3: userActionRequired when terms of service have changed
-  const termsOfServiceUrl = getTermsOfServiceUrl(env);
+  const termsOfServiceUrl = getTermsOfServiceUrl();
   if (termsOfServiceUrl && verified.account.terms_of_service !== termsOfServiceUrl) {
     throw AcmeError.userActionRequired(
       "Terms of service have changed",
@@ -99,7 +99,7 @@ export async function handleNewOrder(
       );
     }
 
-    const eligibility = checkAriRenewalEligibility(predecessor, domainList, undefined, configuredDays(env.RENEWAL_WINDOW_DAYS, CONFIG.DEFAULT_RENEWAL_WINDOW_DAYS));
+    const eligibility = checkAriRenewalEligibility(predecessor, domainList, undefined, configuredDays(CONFIG.RENEWAL_WINDOW_DAYS));
     if (!eligibility.eligible) {
       throw AcmeError.malformed(
         `ARI renewal rejected: ${eligibility.reason || "Certificate not eligible for ARI renewal"}`
@@ -120,7 +120,7 @@ export async function handleNewOrder(
 
   const requestedBefore = parseRequestedDate(payload.notBefore);
   const requestedAfter = parseRequestedDate(payload.notAfter);
-  const maxValidity = configuredDays(env.CERT_VALIDITY_DAYS, CONFIG.DEFAULT_CERT_VALIDITY_DAYS) * 86400;
+  const maxValidity = configuredDays(CONFIG.CERT_VALIDITY_DAYS) * 86400;
   const effectiveBefore = requestedBefore ?? now;
   if ((requestedBefore !== null && requestedBefore < now - 300) ||
       (requestedAfter !== null && (requestedAfter <= effectiveBefore || requestedAfter - effectiveBefore > maxValidity))) {
@@ -364,7 +364,7 @@ export async function handleFinalizeOrder(
       parsedCsr.csr,
       orderDomains,
       env,
-      configuredDays(env.CERT_VALIDITY_DAYS, CONFIG.DEFAULT_CERT_VALIDITY_DAYS),
+      configuredDays(CONFIG.CERT_VALIDITY_DAYS),
       selectedCa,
       { notBefore: order.not_before, notAfter: order.not_after }
     );

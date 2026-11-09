@@ -9,22 +9,22 @@ import {
 export function handleDirectory(request: Request, env: AcmeEnv, baseUrl: string): Response {
   const meta: Record<string, unknown> = {};
 
-  const termsOfService = getTermsOfServiceUrl(env);
+  const termsOfService = getTermsOfServiceUrl();
   if (termsOfService) {
     meta.termsOfService = termsOfService;
   }
 
-  const website = getWebsiteUrl(env);
+  const website = getWebsiteUrl();
   if (website) {
     meta.website = website;
   }
 
-  const caaIdentities = getCaaIdentities(env);
+  const caaIdentities = getCaaIdentities();
   if (caaIdentities && caaIdentities.length > 0) {
     meta.caaIdentities = caaIdentities;
   }
 
-  const externalAccountRequired = getExternalAccountRequired(env);
+  const externalAccountRequired = getExternalAccountRequired();
   if (externalAccountRequired) {
     meta.externalAccountRequired = true;
   }

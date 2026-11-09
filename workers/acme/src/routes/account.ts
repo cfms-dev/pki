@@ -99,7 +99,7 @@ export async function handleNewAccount(
     throw AcmeError.serverInternal("Account lookup failed");
   }
 
-  const termsOfServiceUrl = getTermsOfServiceUrl(env);
+  const termsOfServiceUrl = getTermsOfServiceUrl();
 
   if (verified.payload.onlyReturnExisting) {
     if (!existing) {
@@ -203,7 +203,7 @@ export async function handleAccount(
   }
 
   const account = verified.account;
-  const termsOfServiceUrl = getTermsOfServiceUrl(env);
+  const termsOfServiceUrl = getTermsOfServiceUrl();
 
   if (verified.payload.status === "deactivated") {
     await database.updateAccount(accountId, { status: "deactivated" });

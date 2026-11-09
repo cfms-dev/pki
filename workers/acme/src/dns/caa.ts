@@ -1,4 +1,4 @@
-import { CAA_ISSUER_DOMAIN_NAME, getCaaIssuerDomainName, AcmeEnv } from "../config";
+import { getCaaIssuerDomainName } from "../config";
 import { AcmeError } from "../errors";
 import { dnsBudget, DnsBudget, normalizeDnsTarget, queryDns } from "./doh";
 
@@ -139,7 +139,7 @@ export function parseCaaRecord(raw: string): CaaRecord | null {
 function doesRecordAuthorize(
   record: CaaRecord,
   accountUri?: string,
-  expectedIssuerDomain: string = CAA_ISSUER_DOMAIN_NAME,
+  expectedIssuerDomain: string = getCaaIssuerDomainName(),
   validationMethods: string[] = ["dns-01"]
 ): boolean {
   const normalizedIssuer = record.issuerDomain.toLowerCase();
@@ -190,7 +190,7 @@ export function evaluateCaaRecords(
   records: CaaRecord[],
   isWildcard: boolean,
   accountUri?: string,
-  expectedIssuerDomain: string = CAA_ISSUER_DOMAIN_NAME,
+  expectedIssuerDomain: string = getCaaIssuerDomainName(),
   validationMethods: string[] = ["dns-01"]
 ): CaaValidationResult {
   if (records.length === 0) {
@@ -357,7 +357,7 @@ export async function validateCaa(
   domain: string,
   accountUri?: string,
   fetchImpl: typeof fetch = fetch,
-  expectedIssuerDomain: string = CAA_ISSUER_DOMAIN_NAME,
+  expectedIssuerDomain: string = getCaaIssuerDomainName(),
   validationMethods: string[] = ["dns-01"]
 ): Promise<CaaValidationResult> {
   const isWildcard = domain.startsWith("*.");
@@ -389,12 +389,12 @@ export async function validateCaa(
 export async function validateCaaForOrder(
   domains: string[],
   accountUri: string,
-  env?: { fetch?: typeof fetch; CAA_ISSUER_DOMAIN_NAME?: string; [key: string]: unknown },
+  env?: { fetch?: typeof fetch },
   fetchImpl?: typeof fetch,
   validationMethodsByDomain?: Map<string, string[]>
 ): Promise<void> {
   const fetcher = fetchImpl || (env?.fetch as typeof fetch) || fetch;
-  const caaIssuer = getCaaIssuerDomainName(env as AcmeEnv | undefined);
+  const caaIssuer = getCaaIssuerDomainName();
 
   for (const domain of domains) {
     const methods = validationMethodsByDomain?.get(domain.toLowerCase());
