@@ -93,7 +93,7 @@ nav a {
   min-width: 0;
 }
 
-a[aria-current="page"], a[aria-current="location"] {
+nav [aria-current="page"], nav [aria-current="location"] {
   font-weight: 600;
   color: var(--ink);
 }

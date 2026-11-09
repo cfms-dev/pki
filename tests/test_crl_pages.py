@@ -15,8 +15,9 @@ class Links(HTMLParser):
         self.feed(html)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag == "a":
-            self.links.append(dict(attrs))
+        attributes = dict(attrs)
+        if tag == "a" or tag == "span" and attributes.get("aria-current") == "page":
+            self.links.append(attributes)
 
 
 def test_scan_crl_files_empty(tmp_path: Path) -> None:
@@ -143,7 +144,11 @@ def test_bilingual_navigation_and_project_prefix(tmp_path: Path) -> None:
             "https://github.com/cfms-dev/pki",
             origin + switch,
         ]
-        assert [urljoin(base, link["href"]) for link in links[:6]] == expected
+        expected[current] = None
+        assert [
+            urljoin(base, link["href"]) if "href" in link else None
+            for link in links[:6]
+        ] == expected
         assert links[current]["aria-current"] == "page"
         assert sum(link.get("aria-current") == "page" for link in links[:6]) == 1
         assert f'<html lang="{"zh-CN" if chinese else "en"}">' in html
@@ -152,6 +157,8 @@ def test_bilingual_navigation_and_project_prefix(tmp_path: Path) -> None:
         assert "{{" not in html
         # Resolve every site-local link as if served under /pki/.
         for link in links:
+            if "href" not in link:
+                continue
             url = urlsplit(urljoin(base, link["href"]))
             if url.netloc != "distribution.example":
                 continue

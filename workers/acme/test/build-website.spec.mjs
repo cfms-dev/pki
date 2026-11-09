@@ -32,7 +32,10 @@ describe("Static website build", () => {
     expect(await readFile(path.join(root, "public", "index.html"), "utf8")).toBe(source);
     for (const name of ["index.html", "terms.html", "privacy.html"]) {
       const html = await readFile(output(name), "utf8");
-      for (const href of ["/", "/styles.css", "/terms", "/privacy"]) expect(html).toContain(`href="${href}"`);
+      for (const href of ["/", "/styles.css", "/terms", "/privacy"]) {
+        if (href === ({ "index.html": "/", "terms.html": "/terms", "privacy.html": "/privacy" })[name]) continue;
+        expect(html).toContain(`href="${href}"`);
+      }
       expect(html).not.toMatch(/\{\{\w+\}\}/);
       expect(html).not.toContain("<script");
     }
@@ -54,12 +57,13 @@ describe("Static website build", () => {
           `https://distribution.example/pki/${prefix}`,
           prefix ? `https://distribution.example/pki/${prefix}crl/` : crlUrl,
           `/${prefix}`, "https://github.com/cfms-dev/pki",
-        ]);
-        expect(nav).toContain(`href="/${prefix}" aria-current="${page === "index" ? "page" : "location"}"`);
+        ].filter((_, index) => page !== "index" || index !== 2));
+        expect(nav).toContain(page === "index" ? '<span aria-current="page">' : `href="/${prefix}" aria-current="location"`);
         const alternate = `/${prefix ? "" : "zh-cn/"}${page === "index" ? "" : page}`;
         expect(html).toContain(`class="language-switch" href="${alternate}"`);
         for (const policy of ["terms", "privacy"]) {
-          expect(html).toContain(`href="/${prefix}${policy}" aria-current="${page === policy ? "page" : "false"}"`);
+          const label = policy === "terms" ? (prefix ? "服务条款" : "Terms of service") : (prefix ? "隐私政策" : "Privacy policy");
+          expect(html).toContain(page === policy ? `<span aria-current="page">${label}</span>` : `href="/${prefix}${policy}" aria-current="false"`);
         }
         expect(html).not.toMatch(/\{\{/);
         expect(html).not.toContain("<script");

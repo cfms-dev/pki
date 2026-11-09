@@ -2,9 +2,9 @@
   <a class="brand" href="{{ overview_href }}">CFMS PKI<span>{{ brand_description }}</span></a>
   <nav class="main-nav" aria-label="{{ navigation_label }}">
     <div class="nav-links">
-      <a href="{{ overview_href }}" aria-current="{{ overview_current }}">{{ overview_label }} <span aria-hidden="true">{{ overview_arrow }}</span></a>
-      <a href="{{ crl_href }}" aria-current="{{ crl_current }}">{{ crl_label }} <span aria-hidden="true">{{ crl_arrow }}</span></a>
-      <a href="{{ acme_href }}" aria-current="{{ acme_current }}">{{ acme_label }} <span aria-hidden="true">{{ acme_arrow }}</span></a>
+      {% if overview_current == "page" %}<span aria-current="page">{{ overview_label }}</span>{% else %}<a href="{{ overview_href }}" aria-current="{{ overview_current }}">{{ overview_label }} <span aria-hidden="true">{{ overview_arrow }}</span></a>{% endif %}
+      {% if crl_current == "page" %}<span aria-current="page">{{ crl_label }}</span>{% else %}<a href="{{ crl_href }}" aria-current="{{ crl_current }}">{{ crl_label }} <span aria-hidden="true">{{ crl_arrow }}</span></a>{% endif %}
+      {% if acme_current == "page" %}<span aria-current="page">{{ acme_label }}</span>{% else %}<a href="{{ acme_href }}" aria-current="{{ acme_current }}">{{ acme_label }} <span aria-hidden="true">{{ acme_arrow }}</span></a>{% endif %}
       <a href="https://github.com/cfms-dev/pki">{{ source_label }} <span aria-hidden="true">↗</span></a>
     </div>
     <a class="language-switch" href="{{ switch_href }}" lang="{{ switch_lang }}" hreflang="{{ switch_lang }}" aria-label="{{ switch_description }}">

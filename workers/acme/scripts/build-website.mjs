@@ -8,7 +8,12 @@ const sharedRoot = fileURLToPath(new URL("../../../src/cfms_pki/templates/web/",
 
 /** Replace only source placeholders, never text inserted by a previous replacement. */
 export function renderTemplate(template, values, fragments = []) {
-  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key) => {
+  // Shared Jinja templates use this condition for non-link current-page labels.
+  const selected = template.replace(
+    /\{% if (\w+) == "page" %\}([\s\S]*?)\{% else %\}([\s\S]*?)\{% endif %\}/g,
+    (_, key, current, link) => values[key] === "page" ? current : link,
+  );
+  return selected.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key) => {
     if (!Object.hasOwn(values, key)) throw new Error(`Unknown website template placeholder: ${key}`);
     const value = String(values[key]);
     // Only locally rendered HTML fragments bypass escaping in the outer shell.
