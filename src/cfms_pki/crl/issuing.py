@@ -203,7 +203,7 @@ def issue_crl_for_ca(
 
     output_path = resolve_crl_output_path(ca_id, ca_info, registry_dir)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    write_atomic(output_path, crl.public_bytes(serialization.Encoding.PEM))
+    write_atomic(output_path, crl.public_bytes(serialization.Encoding.PEM), mode=0o644)
 
     print(
         f"Issued CRL for CA '{ca_id}': {output_path} (CRLNumber={crl_number}, revoked={len(revoked)}, excluded_expired={excluded_expired})"

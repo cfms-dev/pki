@@ -276,7 +276,7 @@ def revoke_certificate(args: argparse.Namespace) -> None:
 
     # Save atomically
     json_bytes = (json.dumps(rev_data, indent=4) + "\n").encode("utf-8")
-    write_atomic(revocations_path, json_bytes)
+    write_atomic(revocations_path, json_bytes, mode=0o644)
 
     action = "Updated" if existed else "Added"
     print(

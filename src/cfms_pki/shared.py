@@ -123,6 +123,8 @@ def load_signing_key(args: argparse.Namespace):
 
 
 def check_signer(ca: x509.Certificate, key, now: datetime) -> None:
+    if isinstance(key, rsa.RSAPrivateKey) and key.key_size < 2048:
+        raise ValueError("RSA keys must be at least 2048 bits")
     key_der = key.public_key().public_bytes(
         serialization.Encoding.DER,
         serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -166,17 +168,22 @@ def authority_key_identifier(ca: x509.Certificate) -> x509.AuthorityKeyIdentifie
     return x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(ski)
 
 
-def write_atomic(path: Path, content: bytes) -> None:
+def write_atomic(path: Path, content: bytes, *, mode: int = 0o600) -> None:
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="wb", dir=path.parent, prefix=f".{path.name}.", delete=False
         ) as stream:
             temporary = Path(stream.name)
+            if os.name == "nt":
+                from cfms_pki.windows_acl import protect_temporary_file
+
+                protect_temporary_file(temporary, path, mode)
+            else:
+                os.fchmod(stream.fileno(), mode)
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-        os.chmod(temporary, 0o644)  # CRLs are public, unlike CA private keys.
         os.replace(temporary, path)
     finally:
         if temporary is not None:

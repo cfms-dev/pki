@@ -81,12 +81,50 @@ def build_ca_certificate(
 ) -> x509.Certificate:
     """Build and sign an X.509 CA certificate (Self-Signed Root or Intermediate)."""
     now = datetime.now(UTC)
+    if valid_days <= 0:
+        raise ValueError("valid_days must be positive")
     not_after = now + timedelta(days=valid_days)
 
     is_self_signed = issuer_cert is None
     signing_key = key if is_self_signed else issuer_key
     if signing_key is None:
         raise ValueError("Missing signing key for CA certificate")
+    for candidate in (key, signing_key):
+        if isinstance(candidate, rsa.RSAPrivateKey) and candidate.key_size < 2048:
+            raise ValueError("RSA keys must be at least 2048 bits")
+
+    if issuer_cert is not None:
+        if not (
+            issuer_cert.not_valid_before_utc <= now < issuer_cert.not_valid_after_utc
+        ):
+            raise ValueError("issuer certificate is not currently valid")
+        try:
+            constraints = issuer_cert.extensions.get_extension_for_class(
+                x509.BasicConstraints
+            ).value
+        except x509.ExtensionNotFound:
+            raise ValueError("issuer certificate lacks BasicConstraints") from None
+        if not constraints.ca:
+            raise ValueError("issuer certificate is not a CA")
+        try:
+            usage = issuer_cert.extensions.get_extension_for_class(x509.KeyUsage).value
+        except x509.ExtensionNotFound:
+            usage = None
+        if usage is not None and not usage.key_cert_sign:
+            raise ValueError("issuer certificate forbids certificate signing")
+        if constraints.path_length is not None and (
+            constraints.path_length == 0
+            or path_length is None
+            or path_length >= constraints.path_length
+        ):
+            raise ValueError("issuer path length constraint would be exceeded")
+        encoding = serialization.Encoding.DER
+        form = serialization.PublicFormat.SubjectPublicKeyInfo
+        if signing_key.public_key().public_bytes(
+            encoding, form
+        ) != issuer_cert.public_key().public_bytes(encoding, form):
+            raise ValueError("private key does not match issuer certificate")
+        not_after = min(not_after, issuer_cert.not_valid_after_utc)
 
     issuer_name = subject_dn if is_self_signed else issuer_cert.subject
 
@@ -220,14 +258,10 @@ def generate_ca(
         out_key_path.parent.mkdir(parents=True, exist_ok=True)
         # Write private key with restrictive permissions
         write_atomic(out_key_path, key_pem)
-        try:
-            os.chmod(out_key_path, 0o600)
-        except OSError:
-            pass
 
     if out_cert_path:
         out_cert_path.parent.mkdir(parents=True, exist_ok=True)
-        write_atomic(out_cert_path, cert_pem)
+        write_atomic(out_cert_path, cert_pem, mode=0o644)
 
     return cert, key
 
