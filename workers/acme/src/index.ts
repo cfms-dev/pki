@@ -5,7 +5,6 @@ import { AcmeError } from "./errors";
 import { createAndSaveNonce } from "./crypto/nonce";
 import { bindPublishedRequestUrl } from "./crypto/jws";
 import { handleDirectory } from "./routes/directory";
-import { handleWebsite, isWebsitePath } from "./routes/website";
 import { handleNewNonce } from "./routes/nonce";
 import { handleAccount, handleNewAccount } from "./routes/account";
 import { handleKeyChange } from "./routes/key-change";
@@ -37,6 +36,13 @@ export default {
     bindPublishedRequestUrl(request, baseUrl);
     const path = url.pathname.replace(/\/+$/, "") || "/";
 
+    // Assets normally bypass this Worker. Missing website resources must also
+    // stay outside the ACME database and nonce/error paths.
+    if (["/", "/index", "/index.html", "/terms", "/terms.html", "/privacy", "/privacy.html"].includes(path)
+      || path.endsWith(".css") || path.startsWith("/images/")) {
+      return env.ASSETS.fetch(request);
+    }
+
     // CORS preflight does not touch the database.
     if (request.method === "OPTIONS") {
       return new Response(null, {
@@ -49,8 +55,6 @@ export default {
         },
       });
     }
-
-    if (isWebsitePath(path)) return handleWebsite(request, path, env, baseUrl);
 
     const database = new Database(env.DB);
     // Read-only directory discovery never touches D1.

@@ -11,21 +11,30 @@ The ACME directory is served at `/directory` (for production:
 
 The root `/` serves an English HTML service overview, independently of D1.
 Use `/directory`, rather than the homepage, as your ACME client's server URL.
-The homepage supports GET and HEAD; other methods return 405, with OPTIONS
-retaining the server's CORS preflight behavior.
+Webpages use native Workers Assets handling for GET, HEAD, unsupported methods,
+redirects, caching and conditional requests. They do not receive the ACME API's
+Link, CORS or nonce headers, or a custom five-minute cache policy.
 
-Web assets live in `public/`: `index.html`, `terms.html`, `privacy.html` and
-`styles.css`. Wrangler's `[assets]` configuration binds this directory as
-`ASSETS`, with `run_worker_first = true` and `html_handling = "none"`.
-`src/routes/website.ts` handles these requests before database initialization;
-CSS and image requests (including missing files) also stay independent of D1.
+Web sources live in `public/`. `npm run build:website` copies them to the ignored
+`dist/website/` output and substitutes the HTML-escaped `CONFIG.CRL_BASE_URL` in
+the homepage at build time. The source template is never overwritten. Change
+that setting and rebuild/redeploy to update the published CRL links.
+`npm run build` builds both CA assets and the website; Wrangler runs it before
+local development, type generation and deployment, including dry runs.
 
-The homepage is read through `ASSETS.fetch()` and rendered with escaped,
-runtime-configured directory and CRL links. It retains its five-minute public
-cache policy; source asset validators are removed from the rendered response.
-`/index.html` redirects to `/`. The policy pages use `/terms.html` and
-`/privacy.html`, with shared styles at `/styles.css`. There are no browser
-scripts. Website failures do not generate an ACME nonce or access D1.
+The homepage always displays and links `/directory`, resolved by the browser
+against the current site. It does not inspect `ACME_BASE_URL` or infer an ACME
+hostname. The dynamic ACME API retains its existing behavior: an empty
+`ACME_BASE_URL` derives published URLs from the request origin, while a nonempty
+value overrides that origin. No nonempty base URL is required to build the site.
+
+Wrangler serves `dist/website/` with asset-first routing and
+`html_handling = "auto-trailing-slash"`. Canonical pages are `/`, `/terms` and
+`/privacy`, with shared styles at `/styles.css`. `/index.html` and the policy
+`.html` aliases use Assets' native redirects. There is no SPA fallback or browser
+script. Missing CSS/images and website requests that reach the Worker are
+forwarded unchanged to `ASSETS.fetch()` before database initialization, without
+ACME nonce generation or template rendering.
 
 Publishing the terms page does not itself enable ACME consent enforcement.
 `CONFIG.TERMS_OF_SERVICE_URL` remains empty by default. Set it to the absolute

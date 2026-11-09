@@ -41,9 +41,9 @@ try {
     ],
     compatibilityDate: "2026-11-05", compatibilityFlags: ["nodejs_compat"],
     assets: {
-      directory: path.resolve("public"), binding: "ASSETS", run_worker_first: true,
+      directory: path.resolve("dist/website"), binding: "ASSETS",
       routerConfig: { has_user_worker: true },
-      assetConfig: { html_handling: "none", not_found_handling: "none" },
+      assetConfig: { html_handling: "auto-trailing-slash", not_found_handling: "none" },
     },
     d1Databases: ["DB"],
     bindings: { PK_GENERIC_INTERMEDIATE: `-----BEGIN PRIVATE KEY-----\n${key}\n-----END PRIVATE KEY-----` },
@@ -56,20 +56,33 @@ try {
   const home = await runtime.dispatchFetch(`${base}/`);
   assert.equal(home.status, 200, await home.clone().text());
   assert.equal(home.headers.get("Content-Type"), "text/html; charset=utf-8");
-  assert.equal(home.headers.get("Link"), `<${base}/directory>;rel="index"`);
+  assert.equal(home.headers.get("Link"), null);
+  assert.equal(home.headers.get("Access-Control-Allow-Origin"), null);
   const homeHtml = await home.text();
   assert.ok(homeHtml.includes("Certificate issuance,"));
-  assert.ok(homeHtml.includes(`href="${base}/directory"`));
+  assert.ok(homeHtml.includes('href="/directory"><code>/directory</code>'));
+  assert.ok(!homeHtml.includes("{{CRL_URL}}"));
+  const otherOrigin = await runtime.dispatchFetch("https://other.runtime.test/");
+  assert.equal(await otherOrigin.text(), homeHtml);
+  const etag = home.headers.get("ETag");
+  assert.ok(etag, "Static homepage should have an asset validator");
+  assert.equal(home.headers.get("Cache-Control"), "public, max-age=0, must-revalidate");
+  const cached = await runtime.dispatchFetch(`${base}/`, { headers: { "If-None-Match": etag } });
+  assert.equal(cached.status, 304);
+  assert.equal(await cached.text(), "");
   assert.ok(!homeHtml.includes("{{DIRECTORY_URL}}"));
   const homeHead = await runtime.dispatchFetch(`${base}/`, { method: "HEAD" });
   assert.equal(homeHead.status, 200);
   assert.equal(homeHead.headers.get("Content-Type"), home.headers.get("Content-Type"));
   assert.equal(await homeHead.text(), "");
   const redirect = await runtime.dispatchFetch(`${base}/index.html`, { redirect: "manual" });
-  assert.equal(redirect.status, 308);
-  assert.equal(redirect.headers.get("Location"), `${base}/`);
+  assert.equal(redirect.status, 307);
+  assert.equal(new URL(redirect.headers.get("Location"), base).href, `${base}/`);
   for (const page of ["terms", "privacy"]) {
-    const response = await runtime.dispatchFetch(`${base}/${page}.html`);
+    const alias = await runtime.dispatchFetch(`${base}/${page}.html`, { redirect: "manual" });
+    assert.equal(alias.status, 307);
+    assert.equal(new URL(alias.headers.get("Location"), base).pathname, `/${page}`);
+    const response = await runtime.dispatchFetch(`${base}/${page}`);
     assert.equal(response.status, 200);
     assert.ok(response.headers.get("Content-Type").startsWith("text/html"));
     assert.ok((await response.text()).includes('href="/styles.css"'));
@@ -77,13 +90,17 @@ try {
   const css = await runtime.dispatchFetch(`${base}/styles.css`);
   assert.equal(css.status, 200);
   assert.ok(css.headers.get("Content-Type").startsWith("text/css"));
-  assert.equal((await runtime.dispatchFetch(`${base}/missing.css`)).status, 404);
-  assert.equal(home.headers.get("ETag"), null);
-  assert.equal(home.headers.get("Last-Modified"), null);
-  for (const page of ["/", "/index.html", "/terms.html", "/privacy.html", "/styles.css"]) {
-    const rejected = await runtime.dispatchFetch(`${base}${page}`, { method: "POST" });
-    assert.equal(rejected.status, 405);
-    assert.equal(rejected.headers.get("Replay-Nonce"), null);
+  for (const resource of ["/missing.css", "/images/missing.png"]) {
+    const missing = await runtime.dispatchFetch(`${base}${resource}`);
+    assert.equal(missing.status, 404);
+    assert.equal(missing.headers.get("Replay-Nonce"), null);
+  }
+  for (const page of ["/", "/index.html", "/terms", "/privacy", "/styles.css"]) {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+      const rejected = await runtime.dispatchFetch(`${base}${page}`, { method, redirect: "manual" });
+      assert.equal(rejected.status, 405);
+      assert.equal(rejected.headers.get("Replay-Nonce"), null);
+    }
     const head = await runtime.dispatchFetch(`${base}${page}`, { method: "HEAD", redirect: "manual" });
     assert.equal(await head.text(), "");
   }
