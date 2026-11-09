@@ -556,6 +556,15 @@ limit rejections return 429 and `Retry-After: 60`. Both bypass nonce generation.
 Static pages, directory reads and OPTIONS retain their database-free behavior.
 Expired nonces are cleaned every five minutes in bounded batches. Use
 `npm run cleanup:nonces` repeatedly to drain a reported backlog.
+Scheduled cleanup only needs the nonce table; it never initializes or upgrades
+other tables. Failed invocations log `acme_nonce_cleanup_failed` with an
+`errorId`, cron expression, scheduled timestamp and a fixed `category`
+(`schema`, `quota`, `overloaded`, `timeout`, `unavailable`, or `unknown`). The
+thrown error includes the same category and ID for correlation, without raw
+database messages, SQL, parameters or exception causes. Categories are diagnostic
+hints; unknown driver errors remain `unknown`. Check D1 availability/limits or
+apply reviewed migrations as appropriate; a failed cleanup remains a failed
+invocation and the next cron run will try again.
 
 Use Node.js 26.13.0 and npm 12.2.2. Run `npm ci`, `npm run typecheck`,
 `npm test`, `npm run test:runtime`, and `npm audit` before deployment.

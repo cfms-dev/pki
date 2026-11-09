@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import { AcmeEnv, CONFIG } from "./config";
 import { Database } from "./db/queries";
+import { databaseErrorCategory } from "./db/errors";
 import { AcmeError } from "./errors";
 import { createAndSaveNonce } from "./crypto/nonce";
 import { bindPublishedRequestUrl } from "./crypto/jws";
@@ -17,14 +18,18 @@ import { handleRenewalInfo } from "./routes/ari";
 import { checkIngress } from "./ratelimit/ingress";
 
 export default {
-  async scheduled(_event: ScheduledController, env: AcmeEnv, _ctx: ExecutionContext): Promise<void> {
-    const database = new Database(env.DB);
+  async scheduled(event: ScheduledController, env: AcmeEnv, _ctx: ExecutionContext): Promise<void> {
     try {
+      const database = new Database(env.DB);
       const result = await database.cleanupExpiredNonces();
       console.log(JSON.stringify({ event: result.backlog ? "acme_nonce_cleanup_backlog" : "acme_nonce_cleanup", ...result }));
-    } catch {
-      console.error(JSON.stringify({ event: "acme_nonce_cleanup_failed" }));
-      throw new Error("Nonce cleanup failed");
+    } catch (error: unknown) {
+      const errorId = crypto.randomUUID();
+      const category = databaseErrorCategory(error);
+      console.error(JSON.stringify({ event: "acme_nonce_cleanup_failed", errorId, category,
+        cron: event.cron, scheduledTime: event.scheduledTime }));
+      // Do not attach the raw cause: Workers also persists unhandled errors.
+      throw new Error(`Nonce cleanup failed (${category}; ${errorId})`);
     }
   },
   async fetch(
