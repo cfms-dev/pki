@@ -135,6 +135,87 @@ Each hop is checked before any request is made:
 - Validation runs inline in the request; no Queues binding or `waitUntil()` is
   used.
 
+## Account public key identity
+
+Two different values are stored for every account. They must not be conflated:
+
+| Column | Definition | Purpose |
+| --- | --- | --- |
+| `accounts.thumbprint` | RFC 7638 SHA-256 JWK thumbprint of the JWK submitted by the client | ACME key authorization (`token + "." + thumbprint`) for http-01/dns-01 |
+| `accounts.public_key_fingerprint` | `base64url(SHA-256(canonical SubjectPublicKeyInfo DER))` | Actual-key identity used for account uniqueness, keyChange, and finalize key-reuse checks |
+
+The RFC 7638 thumbprint is a protocol value over the JWK's required members as
+supplied. Two legal encodings of one actual key can produce different
+thumbprints: for example an RSA `n` with redundant leading zero octets, or EC
+`x`/`y` coordinates with redundant leading zero bytes. WebCrypto accepts those
+encodings and normalizes them on import. Using the thumbprint as a uniqueness
+index therefore allowed the same actual key to be registered more than once
+and caused the finalize cross-account lookup to miss a re-used account key.
+
+`normalizePublicKey()` in `src/crypto/jws.ts` is the single identity function
+used by account registration, keyChange, CSR parsing/finalize, and migration:
+
+1. Validate `kty`/`crv` for the supported account algorithms (`ES256` P-256,
+   `RS256` RSA, `EdDSA` Ed25519).
+2. Reject private/symmetric JWK members (`d`, `p`, `q`, `dp`, `dq`, `qi`,
+   `oth`, `k`) and invalid/unsupported members.
+3. Strip irrelevant optional members (`kid`, `use`, `key_ops`, `alg`, ...) and
+   import the minimal public JWK through WebCrypto.
+4. Re-export canonical SPKI DER and the canonical public JWK.
+5. Return `SHA-256(SPKI DER)` as the stable fingerprint, plus the RFC 7638
+   thumbprint of the canonical JWK.
+
+Any key that cannot complete this normalization is rejected (fail closed); it
+is never treated as "different" by default.
+
+### newAccount and onlyReturnExisting
+
+A new account is looked up by `public_key_fingerprint`, not by thumbprint. The
+database has a `UNIQUE` index on that column, so a concurrent duplicate insert
+fails in SQLite/D1; the loser returns the existing account with `200 OK` and
+its original `Location` (RFC 8555 § 7.3.1). `onlyReturnExisting` uses the same
+lookup and returns the existing account for any equivalent encoding; if no
+account exists it returns `400 accountDoesNotExist` without creating one.
+
+For new accounts the exact submitted JWK representation is stored together
+with its RFC 7638 thumbprint, so the stored protocol representation and the
+thumbprint used for key authorizations are consistent. Existing accounts keep
+their original `jwk`/`thumbprint`; migration only adds the fingerprint.
+
+### keyChange (RFC 8555 § 7.3.5)
+
+The directory's `keyChange` URL is implemented at `POST /key-change`:
+
+- The outer JWS is authenticated by the current account key (`kid`).
+- The inner JWS must carry the new public key in `jwk`, omit `nonce`, use a
+  `url` identical to the outer JWS, and verify with that new key.
+- The keyChange object's `account` must be the exact account URL, and `oldKey`
+  must normalize to the same actual key as the account's current key.
+- The new key is normalized and looked up by fingerprint. If another account
+  already owns it, the response is `409 Conflict` with that account's
+  `Location` header; the account key is not modified.
+- The update is a single compare-and-swap `UPDATE ... WHERE id = ? AND
+  thumbprint = ?`, protected by the `UNIQUE` fingerprint index. Concurrent
+  rollovers cannot leave a partially updated account, and an identical
+  concurrent rollover is idempotent.
+- Account ID, URL, status, orders, authorizations, and certificates are not
+  modified. A rollover to the same actual key is a no-op so pending challenge
+  key authorizations are not rewritten.
+
+### Finalize key selection (RFC 8555 § 11.1)
+
+Finalize re-reads the account row so a concurrent keyChange cannot leave the
+comparison using a stale key snapshot. It then:
+
+1. Directly compares the CSR's canonical SPKI DER with the current account
+   key's canonical SPKI DER (defensive current-account check).
+2. Calls `ensureAccountPublicKeyIndex()`. If any legacy account key is not yet
+   indexed, or a conflict is unresolved, the request fails closed with
+   `serverInternal` before the order is claimed or a CA is selected.
+3. Looks up `public_key_fingerprint` in the UNIQUE account index. A match is
+   rejected as `badCSR` and the order stays `ready`; no certificate row is
+   written. A CSR key that cannot be normalized is also `badCSR`.
+
 ## Database migration
 
 `Database.initSchema()` (run lazily by the Worker) creates the new
@@ -142,6 +223,91 @@ Each hop is checked before any request is made:
 deployments therefore receive the table automatically on the first request; no
 destructive migration or manual column change is required. `schema.sql` contains
 the same definitions for fresh databases.
+
+### Account public key fingerprint backfill
+
+`initSchema()` adds `accounts.public_key_fingerprint`, the UNIQUE index
+`idx_accounts_public_key_fingerprint`, the partial
+`idx_accounts_missing_public_key_fingerprint` index, and the
+`account_key_conflicts` table. `ALTER TABLE ... ADD COLUMN` does **not**
+compute cryptographic values for existing rows; legacy accounts start with
+`public_key_fingerprint IS NULL` by design.
+
+An administrator runs `npm run migrate:account-keys` using a dedicated D1 write token.
+The script resumes the idempotent backfill in `src/db/account-keys.ts`:
+
+- Only rows with `public_key_fingerprint IS NULL` and no recorded conflict are
+  examined; the check is a cheap indexed existence probe, not an unconditional
+  full-table scan on every request.
+- The fingerprint is computed from the stored JWK through the same
+  `normalizePublicKey()` used everywhere else.
+- Each iteration processes at most 50 accounts; the management script resumes
+  until completion or reports unresolved conflicts. Public requests never run
+  a backfill; key-sensitive operations return HTTP 503 until it is complete.
+- Account IDs, URLs, JWK strings, RFC 7638 thumbprints, statuses, contacts, and
+  order/authz/certificate ownership are never rewritten. Existing HTTP-01 and
+  DNS-01 key authorizations therefore keep working.
+
+If two legacy accounts normalize to the same actual key, or a legacy JWK cannot
+be normalized, the migration does not choose a winner or delete anything. It
+leaves the row unindexed and records it in `account_key_conflicts` with the
+account ID(s), a reason code, the public fingerprint (a public hash), and the
+timestamp. The UNIQUE index prevents any later write from silently assigning
+the duplicate fingerprint.
+
+`ensureAccountPublicKeyIndex()` fails closed while any account remains
+unindexed. In that state `newAccount`, `keyChange`, and `finalize` return
+`urn:ietf:params:acme:error:serverInternal`; JWS authentication, account
+updates, order reads, and existing challenge validation still work. Resolve the
+conflicts manually, then rerun the management script:
+
+```sql
+-- Inspect (never contains private key material)
+SELECT account_id, reason, public_key_fingerprint, conflicting_account_id, detected_at
+FROM account_key_conflicts
+ORDER BY detected_at;
+
+-- Verify completeness: must be 0 before certificate issuance is safe
+SELECT COUNT(*) AS unresolved FROM accounts WHERE public_key_fingerprint IS NULL;
+```
+
+For a duplicate actual key, decide which account is canonical, remove or
+re-key the duplicate through an audited administrative process (never delete
+silently), delete its `account_key_conflicts` row, and rerun the management script. For an invalid legacy JWK, repair the row's `jwk`/`thumbprint`
+through an audited process, delete the conflict row, and rerun the management script. Do not drop
+`idx_accounts_public_key_fingerprint` while accounts exist, and do not edit
+`public_key_fingerprint` by hand to a fabricated value.
+
+### Deployment order and rollback
+
+1. Back up/inspect the production D1 database.
+2. Run `npm run migrate:account-keys` with D1 management credentials; the script
+   applies incremental schema changes and backfills public key identities.
+3. Run the verification queries above, then deploy the Worker (`npm run deploy`).
+   New columns for finalize leases/generations and certificate CA IDs are additive.
+4. If conflicts exist, keep the fail-closed state until they are reviewed.
+   Certificate issuance remains unavailable, which is intentional.
+
+Operators who prefer to apply schema before deploying traffic can run the same
+statements manually and ignore the expected `duplicate column name` error on a
+re-run:
+
+```bash
+npx wrangler d1 execute cfms-acme-db --remote --command \
+  "ALTER TABLE accounts ADD COLUMN public_key_fingerprint TEXT;"
+npx wrangler d1 execute cfms-acme-db --remote --command \
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_public_key_fingerprint ON accounts (public_key_fingerprint);"
+npx wrangler d1 execute cfms-acme-db --remote --command \
+  "CREATE INDEX IF NOT EXISTS idx_accounts_missing_public_key_fingerprint ON accounts (id) WHERE public_key_fingerprint IS NULL;"
+npx wrangler d1 execute cfms-acme-db --remote --command \
+  "CREATE TABLE IF NOT EXISTS account_key_conflicts (account_id TEXT PRIMARY KEY, reason TEXT NOT NULL, public_key_fingerprint TEXT, conflicting_account_id TEXT, detected_at INTEGER NOT NULL);"
+```
+
+Rollback is additive and non-destructive: reverting the Worker code leaves the
+new column/table/indexes in place and the previous Worker simply ignores them.
+Do not roll back by deleting the fingerprint column or its UNIQUE index while
+accounts exist, because that reopens the key-reuse vulnerability.
+
 
 The `validation_generation` column is part of the `CREATE TABLE` definition.
 For a `challenges` table that was created by an earlier deployment without it,
@@ -191,9 +357,17 @@ body/cache handling and fail-closed A/AAAA resolution), `test/http01-flow.spec.t
 per-domain CAA methods, legacy orders), `test/identifiers.spec.ts` (DNS
 identifier normalization and IP-literal rejection), `test/finalize-key.spec.ts`
 (RFC 8555 § 11.1 CSR/account key separation, including cross-account reuse),
-`test/challenge-state.spec.ts` (processing generations and stale-claim
-fencing), and `test/schema-migration.spec.ts` (challenges table/column
-migration and legacy authorization backfill).
+`test/finalize-key-identity.spec.ts` (cross-account rejection under
+non-canonical JWK encodings and fail-closed migration/index states),
+`test/public-key-identity.spec.ts` (unified SPKI normalization, strict JWK
+validation, optional members, RSA/EC/Ed25519), `test/account-key-uniqueness.spec.ts`
+(account registration, onlyReturnExisting, equivalent encodings, concurrent
+registration), `test/key-change.spec.ts` (RFC 8555 § 7.3.5 rollover, reuse,
+concurrency, order ownership), `test/account-key-migration.spec.ts`
+(idempotent legacy backfill, duplicate conflicts, invalid JWKs, legacy
+authentication, UNIQUE enforcement), `test/challenge-state.spec.ts` (processing
+generations and stale-claim fencing), and `test/schema-migration.spec.ts`
+(challenges table/column migration and legacy authorization backfill).
 
 ## Protocol conformance notes
 
@@ -209,15 +383,23 @@ migration and legacy authorization backfill).
   exclusively from the stored order identifiers, never from CSR-supplied names.
 - **Finalize key selection (RFC 8555 § 11.1).** The CSR public key must not be
   the account key that authenticated the finalize request, and must not reuse a
-  key already registered to any other ACME account. Both sides are normalized
-  to canonical SubjectPublicKeyInfo DER (the CSR's SPKI is imported and
-  re-exported through WebCrypto) before comparison, so JWK field order and key
-  encoding do not matter. The CSR key's RFC 7638 thumbprint is then looked up
-  through the accounts table's UNIQUE thumbprint index, which keeps the
-  cross-account check a point lookup instead of a table scan. A match is
-  rejected as `badCSR`, and a CSR key that cannot be normalized is also
-  rejected as `badCSR`; the check runs before the order is claimed and before
-  any intermediate CA is selected.
+  key already registered to any other ACME account. Account keys are compared
+  through `SHA-256(canonical SPKI DER)` (`public_key_fingerprint`), not through
+  the RFC 7638 thumbprint: the thumbprint is a protocol value that differs for
+  legal alternate encodings of the same key, and the stored JWK JSON is not
+  canonical. The CSR key's SPKI is imported/re-exported through WebCrypto in
+  exactly the same way. The cross-account check is a point lookup through the
+  accounts table's UNIQUE `public_key_fingerprint` index. A match is rejected
+  as `badCSR`, and a CSR key that cannot be normalized is also rejected as
+  `badCSR`. The check runs before the order is claimed and before any
+  intermediate CA is selected. If a legacy account has not been indexed yet,
+  the request fails closed with `serverInternal` instead of assuming the key is
+  unused.
+- **Account key rollover (RFC 8555 § 7.3.5).** `POST /key-change` verifies the
+  nested inner/outer JWS, exact account URL, and `oldKey`, rejects a new key
+  already owned by any account (`409` with that account's `Location`), and
+  updates the account key, RFC 7638 thumbprint, and SPKI fingerprint atomically
+  with a compare-and-swap `UPDATE`. Orders and authorizations are untouched.
 - **CAA validationmethods (RFC 8657 § 4).** Finalize collects the challenge
   type that actually succeeded for each authorization and evaluates each
   domain's CAA records against that domain's method(s). A mixed order can use
@@ -279,3 +461,26 @@ migration and legacy authorization backfill).
 - `finalize` performs CAA revalidation and checks authorization expiry again
   immediately before persisting the certificate. CAA `validationmethods` is
   evaluated against the method(s) that actually validated each authorization.
+
+## Security operations
+
+Use Node.js 26.13.0 and npm 12.2.2. Run `npm ci`, `npm run typecheck`,
+`npm test`, `npm run test:runtime`, and `npm audit` before deployment.
+The runtime test uses Wrangler's exact bundled workerd/Miniflare version and
+performs a local D1 upgrade and certificate issuance with disposable CA material.
+
+`CERT_VALIDITY_DAYS` and `RENEWAL_WINDOW_DAYS` must be positive integer day
+counts. The issuance interval is capped by the selected CA's expiration.
+`CRL_BASE_URL` defaults to `https://cfms-pki.crpteam.club/crl`; newly issued
+certificates include a per-CA CRL distribution point. No retroactive certificate
+extension changes are possible.
+
+JWS requests require `application/jose+json`, a maximum 64 KiB body, and exact
+published URL/account URL binding. POST-as-GET payloads must be empty.
+DNS TXT and CAA lookups have a 20-second budget, 10-second request limit,
+64 KiB response limit and at most eight alias hops. DNS errors block issuance.
+HTTP-01 keeps its existing target restrictions; DoH results cannot pin Workers'
+independent fetch DNS resolution and do not eliminate DNS rebinding risk.
+
+See [the security rollout runbook](../../docs/security-rollout.md) for D1
+backup, migration, Cloudflare credentials, verified revocation export and rollback.
